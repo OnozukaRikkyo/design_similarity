@@ -12,6 +12,7 @@
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from tqdm import tqdm
@@ -185,19 +186,31 @@ def process_year(
                         type_used,
                     )
 
-                try:
-                    result = judge_similarity(src_path, tgt_path)
-                    record["image_type_used"] = type_used
-                    record["similarity"]      = result["similarity"]
-                    record["confidence"]      = result["confidence"]
-                    record["reason"]          = result["reason"]
-                    n_done += 1
-                    tqdm.write(
-                        f"  -> {result['similarity']} (confidence={result['confidence']}) | {result['reason']}"
-                    )
-                except Exception as e:
-                    tqdm.write(f"  -> ERROR: {e}", file=sys.stderr)
-                    sys.exit(1)
+                RETRY_WAIT_SEC = 600
+                MAX_RETRIES = 2
+                for attempt in range(MAX_RETRIES + 1):
+                    try:
+                        result = judge_similarity(src_path, tgt_path)
+                        record["image_type_used"] = type_used
+                        record["similarity"]      = result["similarity"]
+                        record["confidence"]      = result["confidence"]
+                        record["reason"]          = result["reason"]
+                        n_done += 1
+                        tqdm.write(
+                            f"  -> {result['similarity']} (confidence={result['confidence']}) | {result['reason']}"
+                        )
+                        break
+                    except Exception as e:
+                        if "503" in str(e) or "UNAVAILABLE" in str(e):
+                            if attempt < MAX_RETRIES:
+                                tqdm.write(f"  [503] サービス混雑。{RETRY_WAIT_SEC}秒後にリトライ ({attempt + 1}/{MAX_RETRIES})...", file=sys.stderr)
+                                time.sleep(RETRY_WAIT_SEC)
+                            else:
+                                tqdm.write(f"  [ERROR] 503が{MAX_RETRIES}回続いたため終了します。", file=sys.stderr)
+                                sys.exit(1)
+                        else:
+                            tqdm.write(f"  -> ERROR: {e}", file=sys.stderr)
+                            sys.exit(1)
 
                 out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
                 out_f.flush()  # 1件ごとに書き出し（中断時のデータ損失を防ぐ）

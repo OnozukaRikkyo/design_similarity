@@ -259,7 +259,7 @@ def judge_similarity(
         print(f"  [wait] {remaining:.1f}秒 待機中...", flush=True)
         time.sleep(remaining)
     else:
-        time.sleep(0.5)
+        time.sleep(2)
 
     raw = response.text.strip()
 
