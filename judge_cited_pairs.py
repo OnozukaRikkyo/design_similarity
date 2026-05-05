@@ -187,7 +187,7 @@ def process_year(
                     )
 
                 RETRY_WAIT_SEC = 300
-                MAX_RETRIES = 2
+                MAX_RETRIES = 4
                 for attempt in range(MAX_RETRIES + 1):
                     try:
                         result = judge_similarity(src_path, tgt_path)
