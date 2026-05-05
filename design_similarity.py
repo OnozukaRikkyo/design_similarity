@@ -9,7 +9,6 @@ Gemini 2.5 Flash-Lite (Google AI Studio 無料ティア) を使用
   - 250K TPM (tokens per minute)
 """
 
-import base64
 import time
 import os
 import sys
@@ -23,7 +22,8 @@ from collections import deque
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from PIL import Image
 
 from image_processor import ImageProcessor
@@ -131,8 +131,8 @@ _SUPPORTED_SUFFIXES = {".tif", ".tiff", ".jpg", ".jpeg", ".png", ".webp", ".gif"
 _DEBUG_IMAGE_DIR = Path(__file__).parent / "debug" / "image"
 
 
-def load_image_part(path: str) -> dict:
-    """画像ファイルを余白削除・縮小してから Gemini API の inline_data 形式に変換する"""
+def load_image_part(path: str) -> types.Part:
+    """画像ファイルを余白削除・縮小してから Gemini API の Part 形式に変換する"""
     import io
 
     p = Path(path)
@@ -150,7 +150,7 @@ def load_image_part(path: str) -> dict:
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    return {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(buf.getvalue()).decode()}}
+    return types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png")
 
 
 def _get_image_size(path: str) -> tuple[int, int]:
@@ -202,8 +202,7 @@ def judge_similarity(
             "  export GEMINI_API_KEY='your-api-key'"
         )
 
-    genai.configure(api_key=key)
-    model = genai.GenerativeModel(MODEL)
+    client = genai.Client(api_key=key)
 
     img1 = load_image_part(image_path_1)
     img2 = load_image_part(image_path_2)
@@ -214,11 +213,7 @@ def judge_similarity(
     # レート制限チェック＆待機
     _limiter.wait_for_slot(n_images=2)
 
-    contents = [
-        img1,
-        img2,
-        {"text": prompt},
-    ]
+    contents = [img1, img2, types.Part.from_text(text=prompt)]
 
     print(
         f"  [request] {Path(image_path_1).name}({w1}×{h1})"
@@ -227,9 +222,12 @@ def judge_similarity(
     )
 
     t_start = time.time()
-    response = model.generate_content(
-        contents,
-        generation_config={"thinking_config": {"thinking_budget": THINKING_BUDGET}},
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_budget=THINKING_BUDGET),
+        ),
     )
     elapsed = time.time() - t_start
 

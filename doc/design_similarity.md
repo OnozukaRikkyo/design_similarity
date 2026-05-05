@@ -48,15 +48,16 @@ class RateLimiter:
 
 ---
 
-### `load_image_part(path: str) -> dict`
+### `load_image_part(path: str) -> types.Part`
 
-画像ファイルに前処理を施してから Gemini API の `inline_data` 形式（base64 エンコード）に変換する。
+画像ファイルに前処理を施してから `google.genai.types.Part` に変換する。
 
 **処理の流れ**
 
 1. `ImageProcessor.process()` で余白削除・長辺 768px リサイズを適用
 2. RGB に変換して PNG としてエンコード（全形式統一）
-3. `DEBUG = True` の場合は処理済み画像を `debug/image/<元ファイル名>.png` に保存
+3. `types.Part.from_bytes(data=..., mime_type="image/png")` として返す
+4. `DEBUG = True` の場合は処理済み画像を `debug/image/<元ファイル名>.png` に保存
 
 対応形式: `.tif` / `.tiff` / `.jpg` / `.jpeg` / `.png` / `.webp` / `.gif` / `.bmp`
 
@@ -99,7 +100,7 @@ class RateLimiter:
 
 1. 両画像を `load_image_part()` でエンコードし、`_get_image_size()` でサイズを取得
 2. `_limiter.wait_for_slot()` で RPM / IPM / RPD を確認（必要なら待機）
-3. `generate_content()` を `thinking_budget=THINKING_BUDGET` 付きで呼び出し、経過時間を計測
+3. `client.models.generate_content()` を `ThinkingConfig(thinking_budget=THINKING_BUDGET)` 付きで呼び出し、経過時間を計測
 4. `response.usage_metadata` からトークン内訳（入力・出力・思考・合計）と処理時間を表示
 5. `elapsed < MIN_INTERVAL_SEC` の場合は残り時間だけスリープ（IPM 制約の保証）
 6. モデル出力から JSON を抽出してパース

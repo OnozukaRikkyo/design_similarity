@@ -26,6 +26,8 @@
 pip install -r requirements.txt
 ```
 
+> **Note:** `requirements.txt` には `google-genai` が指定されています。旧 `google-generativeai` は `thinking_config` 非対応のため使用しません。
+
 ### インタープリタが認識されない場合
 
 `Ctrl+Shift+P` → `Python: Select Interpreter` → `.venv` を選択してください。

@@ -14,9 +14,12 @@ import json
 import sys
 from pathlib import Path
 
+from tqdm import tqdm
+
 from PIL import Image, ImageDraw, ImageFont
 
 from design_similarity import judge_similarity
+from image_processor import ImageProcessor
 
 # ---------------------------------------------------------------------------
 # パス設定
@@ -73,8 +76,8 @@ def save_debug_image(
     """
     DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
-    src_img = Image.open(src_path).convert("RGB")
-    tgt_img = Image.open(tgt_path).convert("RGB")
+    src_img = ImageProcessor.process_file(src_path).convert("RGB")
+    tgt_img = ImageProcessor.process_file(tgt_path).convert("RGB")
 
     # 高さを揃えてリサイズ
     target_h = 400
@@ -136,7 +139,7 @@ def process_year(
         return
 
     if DEBUG:
-        print(f"[debug] 画像出力先: {DEBUG_DIR}")
+        tqdm.write(f"[debug] 画像出力先: {DEBUG_DIR}")
 
     # 処理済みペアを収集（resume 時）
     done_keys: set[tuple[str, str]] = set()
@@ -144,7 +147,7 @@ def process_year(
         for line in open(out_path, encoding="utf-8"):
             r = json.loads(line)
             done_keys.add((r["source"], r["target"]))
-        print(f"[{year}] 再開: {len(done_keys):,} 件処理済み")
+        tqdm.write(f"[{year}] 再開: {len(done_keys):,} 件処理済み")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -153,51 +156,58 @@ def process_year(
     n_done  = n_skip = n_error = 0
 
     with open(out_path, "a" if (resume and out_path.exists()) else "w", encoding="utf-8") as out_f:
-        for i, line in enumerate(lines, 1):
-            record = json.loads(line)
-            key = (record["source"], record["target"])
+        with tqdm(total=total, desc=year, unit="件", dynamic_ncols=True) as pbar:
+            for i, line in enumerate(lines, 1):
+                record = json.loads(line)
+                key = (record["source"], record["target"])
 
-            if key in done_keys:
-                n_skip += 1
-                continue
+                if key in done_keys:
+                    n_skip += 1
+                    pbar.update(1)
+                    continue
 
-            pair = pick_common_type(record, img_type)
-            if pair is None:
-                n_skip += 1
-                continue
+                pair = pick_common_type(record, img_type)
+                if pair is None:
+                    n_skip += 1
+                    pbar.update(1)
+                    continue
 
-            type_used, src_path, tgt_path = pair
-            print(
-                f"[{year}] {i}/{total}  "
-                f"{record['source']} × {record['target']}  [{type_used}]",
-                flush=True,
-            )
-
-            if DEBUG:
-                save_debug_image(
-                    src_path, tgt_path,
-                    record["source"], record["target"],
-                    type_used,
+                type_used, src_path, tgt_path = pair
+                tqdm.write(
+                    f"[{year}] {i}/{total}  "
+                    f"{record['source']} × {record['target']}  [{type_used}]"
                 )
 
-            try:
-                result = judge_similarity(src_path, tgt_path)
-                record["image_type_used"] = type_used
-                record["similarity"]      = result["similarity"]
-                record["confidence"]      = result["confidence"]
-                record["reason"]          = result["reason"]
-                n_done += 1
-                print(f"  -> {result['similarity']} (confidence={result['confidence']}) | {result['reason']}")
-            except Exception as e:
-                result = None
-                record["error"] = str(e)
-                n_error += 1
-                print(f"  -> ERROR: {e}", file=sys.stderr)
+                if DEBUG:
+                    save_debug_image(
+                        src_path, tgt_path,
+                        record["source"], record["target"],
+                        type_used,
+                    )
 
-            out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            out_f.flush()  # 1件ごとに書き出し（中断時のデータ損失を防ぐ）
+                try:
+                    result = judge_similarity(src_path, tgt_path)
+                    record["image_type_used"] = type_used
+                    record["similarity"]      = result["similarity"]
+                    record["confidence"]      = result["confidence"]
+                    record["reason"]          = result["reason"]
+                    n_done += 1
+                    tqdm.write(
+                        f"  -> {result['similarity']} (confidence={result['confidence']}) | {result['reason']}"
+                    )
+                except Exception as e:
+                    result = None
+                    record["error"] = str(e)
+                    n_error += 1
+                    tqdm.write(f"  -> ERROR: {e}", file=sys.stderr)
 
-    print(
+                out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                out_f.flush()  # 1件ごとに書き出し（中断時のデータ損失を防ぐ）
+
+                pbar.update(1)
+                pbar.set_postfix(done=n_done, skip=n_skip, err=n_error)
+
+    tqdm.write(
         f"[{year}] 完了: 判定={n_done:,}  スキップ={n_skip:,}  エラー={n_error:,}  "
         f"-> {out_path}"
     )
