@@ -4,9 +4,8 @@ Gemini 2.5 Flash-Lite (Google AI Studio 無料ティア) を使用
 
 制約:
   - 15 RPM (requests per minute)
-  - 2 IPM (images per minute) ← 1リクエストで画像2枚なので実質 1 req/分
-  - 1,000 RPD (requests per day)
-  - 250K TPM (tokens per minute)
+  - 1,000,000 TPM (tokens per minute)
+  - 1,500 RPD (requests per day)
 """
 
 import time
@@ -31,14 +30,16 @@ from image_processor import ImageProcessor
 
 # ─── 定数 ───────────────────────────────────────────────────────────────────
 
-MODEL = "gemini-2.5-flash-lite"
-
-# 無料ティア上限（安全マージン付き）
-RPM_LIMIT = 14 # 15
-IPM_LIMIT = 2   # 1リクエスト = 画像2枚 → 実質 1 req/min が画像の律速
-RPD_LIMIT = 1_000
+# MODEL = "gemini-2.5-flash-lite"
+# MODEL = "Gemini 2.5 FlasM"
+MODEL = "gemini-3.1-flash-lite-preview"
+# 
+# 無料ティア上限
+RPM_LIMIT = 15
+TPM_LIMIT = 250_000
+RPD_LIMIT = 500
 THINKING_BUDGET = 8192  # 思考トークン上限（0 で無効化）
-MIN_INTERVAL_SEC = 60.0  # IPM制約：1リクエストあたり最低60秒確保
+MIN_INTERVAL_SEC = 1.0  # RPM制約：15RPM → 最低1秒/リクエスト
 DEBUG = False  # True のとき前処理済み画像を debug/image/ に保存する
 
 DEFAULT_PROMPT = """\
@@ -69,8 +70,8 @@ class RateLimiter:
     """スライディングウィンドウ方式のレート制限器"""
 
     def __init__(self):
-        self._req_times: deque[float] = deque()   # 過去1分のリクエスト時刻
-        self._img_times: deque[float] = deque()   # 過去1分の画像送信時刻（枚数）
+        self._req_times: deque[float] = deque()              # 過去1分のリクエスト時刻
+        self._token_times: deque[tuple[float, int]] = deque() # 過去1分の (時刻, トークン数)
         self._day_count: int = 0
         self._day_start: float = time.time()
 
@@ -78,6 +79,15 @@ class RateLimiter:
         now = time.time()
         while q and now - q[0] > window:
             q.popleft()
+
+    def _purge_old_tokens(self, window: float = 60.0) -> None:
+        now = time.time()
+        while self._token_times and now - self._token_times[0][0] > window:
+            self._token_times.popleft()
+
+    def _recent_tokens(self) -> int:
+        self._purge_old_tokens()
+        return sum(t for _, t in self._token_times)
 
     def _reset_day_if_needed(self) -> None:
         if time.time() - self._day_start >= 86400:
@@ -97,31 +107,28 @@ class RateLimiter:
         while True:
             now = time.time()
             self._purge_old(self._req_times)
-            self._purge_old(self._img_times)
 
             req_ok = len(self._req_times) < RPM_LIMIT
-            img_ok = len(self._img_times) + n_images <= IPM_LIMIT
+            tpm_ok = self._recent_tokens() < TPM_LIMIT
 
-            if req_ok and img_ok:
+            if req_ok and tpm_ok:
                 break
 
             # 次にスロットが空く時刻を計算
             waits = []
             if not req_ok:
                 waits.append(60.0 - (now - self._req_times[0]))
-            if not img_ok:
-                needed = (len(self._img_times) + n_images) - IPM_LIMIT
-                waits.append(60.0 - (now - self._img_times[needed - 1]))
+            if not tpm_ok:
+                waits.append(60.0 - (now - self._token_times[0][0]))
 
             wait_sec = max(0.1, max(waits))
             print(f"  [rate-limit] {wait_sec:.1f}秒 待機中...", flush=True)
             time.sleep(wait_sec)
 
-    def record_request(self, n_images: int = 2) -> None:
+    def record_request(self, n_images: int = 2, total_tokens: int = 0) -> None:
         now = time.time()
         self._req_times.append(now)
-        for _ in range(n_images):
-            self._img_times.append(now)
+        self._token_times.append((now, total_tokens))
         self._day_count += 1
 
 
@@ -231,10 +238,10 @@ def judge_similarity(
     )
     elapsed = time.time() - t_start
 
-    _limiter.record_request(n_images=2)
-
     # トークン使用量
     usage = response.usage_metadata
+    total_tokens = usage.total_token_count if usage else 0
+    _limiter.record_request(n_images=2, total_tokens=total_tokens)
     if usage:
         thoughts = getattr(usage, "thoughts_token_count", "-")
         print(
@@ -251,6 +258,8 @@ def judge_similarity(
     if remaining > 0:
         print(f"  [wait] {remaining:.1f}秒 待機中...", flush=True)
         time.sleep(remaining)
+    else:
+        time.sleep(0.5)
 
     raw = response.text.strip()
 
@@ -260,7 +269,12 @@ def judge_similarity(
         end = raw.rindex("}") + 1
         result = json.loads(raw[start:end])
     except (ValueError, json.JSONDecodeError):
-        result = {"similarity": "Unknown", "confidence": -1, "reason": "parse failed"}
+        log_dir = Path(__file__).parent / "log"
+        log_dir.mkdir(exist_ok=True)
+        log_path = log_dir / f"parse_error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        log_path.write_text(f"raw output:\n{raw}\n\n{traceback.format_exc()}", encoding="utf-8")
+        print(f"[ERROR] JSONパースに失敗しました。詳細: {log_path}", flush=True)
+        sys.exit(1)
 
     result["raw"] = raw
     return result

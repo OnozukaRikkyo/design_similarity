@@ -196,10 +196,8 @@ def process_year(
                         f"  -> {result['similarity']} (confidence={result['confidence']}) | {result['reason']}"
                     )
                 except Exception as e:
-                    result = None
-                    record["error"] = str(e)
-                    n_error += 1
                     tqdm.write(f"  -> ERROR: {e}", file=sys.stderr)
+                    sys.exit(1)
 
                 out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
                 out_f.flush()  # 1件ごとに書き出し（中断時のデータ損失を防ぐ）
