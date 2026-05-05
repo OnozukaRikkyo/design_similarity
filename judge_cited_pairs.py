@@ -186,7 +186,7 @@ def process_year(
                         type_used,
                     )
 
-                RETRY_WAIT_SEC = 600
+                RETRY_WAIT_SEC = 300
                 MAX_RETRIES = 2
                 for attempt in range(MAX_RETRIES + 1):
                     try:

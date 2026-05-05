@@ -35,9 +35,14 @@ from image_processor import ImageProcessor
 MODEL = "gemini-3.1-flash-lite-preview"
 # 
 # 無料ティア上限
+RPD_SESSION   = 81    # 本日すでに実行済みのリクエスト数（手動で更新）
+
 RPM_LIMIT = 15
 TPM_LIMIT = 250_000
-RPD_LIMIT = 500
+
+RPD_DAILY     = 500  # APIの1日の絶対上限（変更しない）
+RPD_REMAINING = RPD_DAILY - RPD_SESSION  # このセッションで実行できる残り数
+QUOTA_RESET_TIME = "17:01"  # クォータリセット時刻（HH:MM）
 THINKING_BUDGET = 8192  # 思考トークン上限（0 で無効化）
 MIN_INTERVAL_SEC = 1.0  # RPM制約：15RPM → 最低1秒/リクエスト
 DEBUG = False  # True のとき前処理済み画像を debug/image/ に保存する
@@ -94,15 +99,28 @@ class RateLimiter:
             self._day_count = 0
             self._day_start = time.time()
 
+    @staticmethod
+    def _next_reset_dt() -> datetime:
+        """次のQUOTA_RESET_TIMEのdatetimeを返す"""
+        h, m = map(int, QUOTA_RESET_TIME.split(":"))
+        now = datetime.now()
+        reset = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if reset <= now:
+            reset += timedelta(days=1)
+        return reset
+
     def wait_for_slot(self, n_images: int = 2) -> None:
         """レート上限に達していれば必要な時間だけ待機する"""
         self._reset_day_if_needed()
 
-        if self._day_count >= RPD_LIMIT:
-            raise RuntimeError(
-                f"1日の上限 {RPD_LIMIT} リクエストに達しました。"
-                f"リセット予定: {datetime.fromtimestamp(self._day_start + 86400)}"
+        if self._day_count > RPD_REMAINING:
+            reset_dt = self._next_reset_dt()
+            print(
+                f"\n[完了] 本日の残り上限 {RPD_REMAINING} リクエストを使い切りました。\n"
+                f"  リセット予定: {reset_dt.strftime('%Y-%m-%d %H:%M')} ({QUOTA_RESET_TIME})",
+                flush=True,
             )
+            sys.exit(0)
 
         while True:
             now = time.time()
