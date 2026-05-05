@@ -5,7 +5,7 @@
 入力:  /mnt/eightthdd/uspto/cited_image_pairs/{year}.jsonl
 出力:  /mnt/eightthdd/uspto/similarity_results/{year}.jsonl
 
-各レコードに image_type_used / similarity / score / reason を追加して出力。
+各レコードに image_type_used / similarity / confidence / reason を追加して出力。
 中断した場合は --resume（デフォルト有効）で続きから再開できる。
 """
 
@@ -111,9 +111,9 @@ def save_debug_image(
 
     # 判定結果
     if result:
-        color_map = {"類似": (0, 140, 0), "非類似": (180, 0, 0), "要精査": (160, 100, 0)}
+        color_map = {"Yes": (0, 140, 0), "No": (180, 0, 0)}
         color = color_map.get(result.get("similarity", ""), (80, 80, 80))
-        text  = f"{result.get('similarity', '')}  score={result.get('score', '')}  {result.get('reason', '')}"
+        text  = f"{result.get('similarity', '')}  confidence={result.get('confidence', '')}  {result.get('reason', '')}"
         draw.text((padding, y_img + target_h + padding // 2), text, fill=color, font=font_result)
 
     fname = f"{source_id}__{target_id}__{img_type}.png"
@@ -184,10 +184,10 @@ def process_year(
                 result = judge_similarity(src_path, tgt_path)
                 record["image_type_used"] = type_used
                 record["similarity"]      = result["similarity"]
-                record["score"]           = result["score"]
+                record["confidence"]      = result["confidence"]
                 record["reason"]          = result["reason"]
                 n_done += 1
-                print(f"  -> {result['similarity']} (score={result['score']}) | {result['reason']}")
+                print(f"  -> {result['similarity']} (confidence={result['confidence']}) | {result['reason']}")
             except Exception as e:
                 result = None
                 record["error"] = str(e)
