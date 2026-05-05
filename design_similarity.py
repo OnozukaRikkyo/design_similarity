@@ -15,6 +15,7 @@ import os
 import sys
 import json
 import argparse
+import traceback
 from pathlib import Path
 from datetime import datetime, timedelta
 from collections import deque
@@ -25,15 +26,20 @@ load_dotenv(Path(__file__).parent / ".env")
 import google.generativeai as genai
 from PIL import Image
 
+from image_processor import ImageProcessor
+
 
 # ─── 定数 ───────────────────────────────────────────────────────────────────
 
 MODEL = "gemini-2.5-flash-lite"
 
 # 無料ティア上限（安全マージン付き）
-RPM_LIMIT = 15
+RPM_LIMIT = 14 # 15
 IPM_LIMIT = 2   # 1リクエスト = 画像2枚 → 実質 1 req/min が画像の律速
 RPD_LIMIT = 1_000
+THINKING_BUDGET = 8192  # 思考トークン上限（0 で無効化）
+MIN_INTERVAL_SEC = 60.0  # IPM制約：1リクエストあたり最低60秒確保
+DEBUG = False  # True のとき前処理済み画像を debug/image/ に保存する
 
 DEFAULT_PROMPT = """\
 以下の2つの意匠（デザイン）の類似性を判定してください。
@@ -116,41 +122,55 @@ class RateLimiter:
 
 # ─── 画像読み込み ────────────────────────────────────────────────────────────
 
+_SUPPORTED_SUFFIXES = {".tif", ".tiff", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+_DEBUG_IMAGE_DIR = Path(__file__).parent / "debug" / "image"
+
+
 def load_image_part(path: str) -> dict:
-    """画像ファイルを Gemini API の inline_data 形式に変換。TIF/TIFF は PNG に変換して送信。"""
+    """画像ファイルを余白削除・縮小してから Gemini API の inline_data 形式に変換する"""
     import io
-    from PIL import Image
 
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"画像ファイルが見つかりません: {path}")
+    if p.suffix.lower() not in _SUPPORTED_SUFFIXES:
+        raise ValueError(f"非対応の画像形式: {p.suffix}")
 
-    suffix = p.suffix.lower()
+    with Image.open(p) as raw:
+        img = ImageProcessor.process(raw.copy()).convert("RGB")
 
-    if suffix in (".tif", ".tiff"):
-        img = Image.open(p).convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(buf.getvalue()).decode()}}
+    if DEBUG:
+        _DEBUG_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+        img.save(_DEBUG_IMAGE_DIR / (p.stem + ".png"))
 
-    mime_map = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-        ".bmp": "image/bmp",
-    }
-    mime = mime_map.get(suffix)
-    if mime is None:
-        raise ValueError(f"非対応の画像形式: {suffix}")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(buf.getvalue()).decode()}}
 
-    return {"inline_data": {"mime_type": mime, "data": base64.b64encode(p.read_bytes()).decode()}}
+
+def _get_image_size(path: str) -> tuple[int, int]:
+    """前処理後の画像の (幅, 高さ) を返す"""
+    return ImageProcessor.process_file(path).size
 
 
 # ─── 判定関数 ────────────────────────────────────────────────────────────────
 
 _limiter = RateLimiter()
+
+_ERROR_LOG_DIR = Path(__file__).parent / "log" / "error"
+
+
+def _write_error_log(image1: str, image2: str, exc: BaseException) -> Path:
+    _ERROR_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = _ERROR_LOG_DIR / f"error_{datetime.now().strftime('%Y%m%d')}.log"
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(f"\n[{datetime.now().isoformat()}]\n")
+        f.write(f"image1 : {image1}\n")
+        f.write(f"image2 : {image2}\n")
+        f.write(f"error  : {type(exc).__name__}: {exc}\n")
+        f.write(traceback.format_exc())
+        f.write("-" * 60 + "\n")
+    return log_file
 
 
 def judge_similarity(
@@ -183,6 +203,9 @@ def judge_similarity(
     img1 = load_image_part(image_path_1)
     img2 = load_image_part(image_path_2)
 
+    w1, h1 = _get_image_size(image_path_1)
+    w2, h2 = _get_image_size(image_path_2)
+
     # レート制限チェック＆待機
     _limiter.wait_for_slot(n_images=2)
 
@@ -192,9 +215,39 @@ def judge_similarity(
         {"text": prompt},
     ]
 
-    print(f"  [request] {Path(image_path_1).name} × {Path(image_path_2).name}", flush=True)
-    response = model.generate_content(contents)
+    print(
+        f"  [request] {Path(image_path_1).name}({w1}×{h1})"
+        f" × {Path(image_path_2).name}({w2}×{h2})",
+        flush=True,
+    )
+
+    t_start = time.time()
+    response = model.generate_content(
+        contents,
+        generation_config={"thinking_config": {"thinking_budget": THINKING_BUDGET}},
+    )
+    elapsed = time.time() - t_start
+
     _limiter.record_request(n_images=2)
+
+    # トークン使用量
+    usage = response.usage_metadata
+    if usage:
+        thoughts = getattr(usage, "thoughts_token_count", "-")
+        print(
+            f"  [tokens] 入力:{usage.prompt_token_count}"
+            f" 出力:{usage.candidates_token_count}"
+            f" 思考:{thoughts}"
+            f" 合計:{usage.total_token_count}"
+            f"  [{elapsed:.1f}秒]",
+            flush=True,
+        )
+
+    # IPM上限対応: リクエスト開始から60秒未満なら残り時間だけ待機
+    remaining = MIN_INTERVAL_SEC - elapsed
+    if remaining > 0:
+        print(f"  [wait] {remaining:.1f}秒 待機中...", flush=True)
+        time.sleep(remaining)
 
     raw = response.text.strip()
 
@@ -233,8 +286,10 @@ def batch_judge(pairs: list[tuple[str, str]], prompt: str = DEFAULT_PROMPT) -> l
             results.append(r)
             print(f"  -> {r['similarity']} (score={r['score']}) | {r['reason']}")
         except Exception as e:
-            results.append({"image1": p1, "image2": p2, "error": str(e)})
+            log_file = _write_error_log(p1, p2, e)
             print(f"  -> ERROR: {e}", file=sys.stderr)
+            print(f"  [ログ保存] {log_file}", file=sys.stderr)
+            raise
     return results
 
 
