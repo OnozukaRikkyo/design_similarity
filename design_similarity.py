@@ -35,7 +35,7 @@ from image_processor import ImageProcessor
 MODEL = "gemini-3.1-flash-lite-preview"
 # 
 # 無料ティア上限
-RPD_SESSION   = 81    # 本日すでに実行済みのリクエスト数（手動で更新）
+RPD_SESSION   = 0    # 本日すでに実行済みのリクエスト数（手動で更新）
 
 RPM_LIMIT = 15
 TPM_LIMIT = 250_000

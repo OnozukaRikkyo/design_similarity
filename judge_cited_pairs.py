@@ -220,6 +220,7 @@ def process_year(
                                 type_used,
                                 result=result,
                             )
+                        time.sleep(5)
                         break
                     except Exception as e:
                         err = str(e)
