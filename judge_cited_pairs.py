@@ -205,7 +205,8 @@ def process_year(
                         err = str(e)
                         if "429" in err or "RESOURCE_EXHAUSTED" in err:
                             m = re.search(r"retry in ([\d.]+)s", err)
-                            wait = float(m.group(1)) + 5 if m else RETRY_WAIT_SEC
+                            base = float(m.group(1)) + 5 if m else RETRY_WAIT_SEC
+                            wait = base * (attempt + 1)
                             if attempt < MAX_RETRIES:
                                 tqdm.write(f"  [429] クォータ超過。{wait:.1f}秒後にリトライ ({attempt + 1}/{MAX_RETRIES})...", file=sys.stderr)
                                 time.sleep(wait)
@@ -213,9 +214,10 @@ def process_year(
                                 tqdm.write(f"  [ERROR] 429が{MAX_RETRIES}回続いたため終了します。", file=sys.stderr)
                                 sys.exit(1)
                         elif "503" in err or "UNAVAILABLE" in err:
+                            wait = RETRY_WAIT_SEC * (attempt + 1)
                             if attempt < MAX_RETRIES:
-                                tqdm.write(f"  [503] サービス混雑。{RETRY_WAIT_SEC}秒後にリトライ ({attempt + 1}/{MAX_RETRIES})...", file=sys.stderr)
-                                time.sleep(RETRY_WAIT_SEC)
+                                tqdm.write(f"  [503] サービス混雑。{wait:.1f}秒後にリトライ ({attempt + 1}/{MAX_RETRIES})...", file=sys.stderr)
+                                time.sleep(wait)
                             else:
                                 tqdm.write(f"  [ERROR] 503が{MAX_RETRIES}回続いたため終了します。", file=sys.stderr)
                                 sys.exit(1)
