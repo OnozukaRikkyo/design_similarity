@@ -13,6 +13,7 @@ import argparse
 import json
 import re
 import sys
+import textwrap
 import time
 from pathlib import Path
 
@@ -87,19 +88,31 @@ def save_debug_image(
     tgt_img  = tgt_img.resize((int(tgt_img.width  * target_h / tgt_img.height),  target_h))
 
     label_h  = 24
-    result_h = 28 if result else 0
     padding  = 8
-    total_w  = src_img.width + tgt_img.width + padding * 3
-    total_h  = label_h + target_h + result_h + padding * 2
-
-    canvas = Image.new("RGB", (total_w, total_h), (240, 240, 240))
-    draw   = ImageDraw.Draw(canvas)
 
     try:
         font_label  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 13)
         font_result = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+        font_conf   = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
     except OSError:
-        font_label = font_result = ImageFont.load_default()
+        font_label = font_result = font_conf = ImageFont.load_default()
+
+    total_w  = src_img.width + tgt_img.width + padding * 3
+    # 1文字あたり約7px（DejaVuSans 12pt）で折り返し幅を推定
+    wrap_chars = max(40, (total_w - padding * 2) // 7)
+
+    line_h = 16
+    if result:
+        reason_lines = textwrap.wrap(result.get("reason", ""), width=wrap_chars)
+        result_h = line_h + line_h * len(reason_lines) + padding
+    else:
+        reason_lines = []
+        result_h = 0
+
+    total_h = label_h + target_h + result_h + padding * 2
+
+    canvas = Image.new("RGB", (total_w, total_h), (240, 240, 240))
+    draw   = ImageDraw.Draw(canvas)
 
     # ラベル
     draw.text((padding, padding),                        source_id, fill=(30, 30, 30),  font=font_label)
@@ -117,9 +130,16 @@ def save_debug_image(
     # 判定結果
     if result:
         color_map = {"Yes": (0, 140, 0), "No": (180, 0, 0)}
-        color = color_map.get(result.get("similarity", ""), (80, 80, 80))
-        text  = f"{result.get('similarity', '')}  confidence={result.get('confidence', '')}  {result.get('reason', '')}"
-        draw.text((padding, y_img + target_h + padding // 2), text, fill=color, font=font_result)
+        color = color_map.get(str(result.get("similarity", "")), (80, 80, 80))
+        y_res = y_img + target_h + padding // 2
+        # 1行目: similarity + confidence（太字・判定色）
+        conf_text = f"similarity: {result.get('similarity', '')}  confidence: {result.get('confidence', '')}"
+        draw.text((padding, y_res), conf_text, fill=color, font=font_conf)
+        y_res += line_h
+        # 残行: reason（折り返し・グレー）
+        for ln in reason_lines:
+            draw.text((padding, y_res), ln, fill=(60, 60, 60), font=font_result)
+            y_res += line_h
 
     fname = f"{source_id}__{target_id}__{img_type}.png"
     canvas.save(DEBUG_DIR / fname)
@@ -180,13 +200,6 @@ def process_year(
                     f"{record['source']} × {record['target']}  [{type_used}]"
                 )
 
-                if DEBUG:
-                    save_debug_image(
-                        src_path, tgt_path,
-                        record["source"], record["target"],
-                        type_used,
-                    )
-
                 RETRY_WAIT_SEC = 300
                 MAX_RETRIES = 4
                 for attempt in range(MAX_RETRIES + 1):
@@ -200,6 +213,13 @@ def process_year(
                         tqdm.write(
                             f"  -> {result['similarity']} (confidence={result['confidence']}) | {result['reason']}"
                         )
+                        if DEBUG:
+                            save_debug_image(
+                                src_path, tgt_path,
+                                record["source"], record["target"],
+                                type_used,
+                                result=result,
+                            )
                         break
                     except Exception as e:
                         err = str(e)
@@ -238,6 +258,45 @@ def process_year(
 
 
 # ---------------------------------------------------------------------------
+# debug 画像の再生成（既存 JSONL から confidence/reason を描画）
+# ---------------------------------------------------------------------------
+def reannotate_debug(year: str) -> None:
+    """similarity_results/{year}.jsonl を読み、debug 画像を confidence/reason 付きで再生成する。"""
+    jsonl_path = OUT_DIR / f"{year}.jsonl"
+    if not jsonl_path.exists():
+        print(f"結果ファイルが見つかりません: {jsonl_path}", file=sys.stderr)
+        return
+
+    lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+    tqdm.write(f"[{year}] {len(lines):,} 件を再描画します -> {DEBUG_DIR}")
+
+    for line in lines:
+        record = json.loads(line)
+        img_type   = record.get("image_type_used")
+        src_images = record.get("source_images", {})
+        tgt_images = record.get("target_images", {})
+
+        if not img_type or img_type not in src_images or img_type not in tgt_images:
+            continue
+
+        result = {
+            "similarity": record.get("similarity", ""),
+            "confidence": record.get("confidence", ""),
+            "reason":     record.get("reason", ""),
+        }
+        save_debug_image(
+            src_images[img_type],
+            tgt_images[img_type],
+            record["source"],
+            record["target"],
+            img_type,
+            result=result,
+        )
+
+    tqdm.write(f"[{year}] 再描画完了")
+
+
+# ---------------------------------------------------------------------------
 # メイン
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -258,14 +317,22 @@ def main() -> None:
         "--no-resume", action="store_true",
         help="出力ファイルが存在しても最初から処理し直す",
     )
+    parser.add_argument(
+        "--reannotate", action="store_true",
+        help="新規判定は行わず、既存の similarity_results から debug 画像を再生成する",
+    )
     args = parser.parse_args()
 
     years = args.years if args.years else [
-        p.stem for p in sorted(JSONL_DIR.glob("[0-9]*.jsonl"))
+        p.stem for p in sorted((OUT_DIR if args.reannotate else JSONL_DIR).glob("[0-9]*.jsonl"))
     ]
 
-    for year in years:
-        process_year(year, img_type=args.img_type, resume=not args.no_resume)
+    if args.reannotate:
+        for year in years:
+            reannotate_debug(year)
+    else:
+        for year in years:
+            process_year(year, img_type=args.img_type, resume=not args.no_resume)
 
 
 if __name__ == "__main__":
