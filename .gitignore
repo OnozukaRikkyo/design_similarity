@@ -5,3 +5,8 @@ __pycache__/
 debug/
 *.png
 .vscode/
+
+# 生成ファイル（大容量）
+ergm_input/*.npy
+ergm_input/*.pkl
+output/

@@ -106,6 +106,44 @@ json/<年>.json  ──→  build_edge_list()  ←─────────┘
 > source と target が同一出願で引用されたとき、エッジ属性は source 側のレコードから取得する。
 > 同一ペアが複数の出願で引用された場合は出願ごとに 1 行ずつ出力される（`extract_cited_image_pairs.py` 側で集約）。
 
+### アルゴリズム詳細
+
+#### ステップ1 — `valid_ids` によるホワイトリストフィルタ
+
+`data/` 以下の全 CSV から意匠 ID (`D0XXXXXX`) を `set` として収集する。JSON に含まれる引用先が実際に存在する意匠特許かどうかをここで確認し、無効な ID はエッジ生成前に除外する。
+
+#### ステップ2 — 中間構造 `app_to_patents` への集約
+
+```python
+app_to_patents: dict[str, dict[str, dict]] = defaultdict(dict)
+# 出願番号 → { 特許ID → レコード }
+```
+
+JSON を走査し、各引用レコードを `出願番号 → 特許ID → 代表レコード` の2重辞書に格納する。**同一出願で同一特許が複数回引用された場合は最初のレコードのみ保持**（辞書キーによる自然な重複排除）。
+
+#### ステップ3 — ペア列挙と方向正規化
+
+```python
+patents = sorted(patent_map)        # source < target を保証
+for i in range(len(patents)):
+    for j in range(i + 1, len(patents)):
+        source, target = patents[i], patents[j]
+```
+
+- `sorted()` でアルファベット順に並べることで `source < target` が常に成立し、`(A,B)` と `(B,A)` の重複エッジを防ぐ。
+- `i < j` の上三角ループで全ペアを列挙（組み合わせ数 = nC2）。
+- 引用された特許が 1 件だけの出願はエッジを生成できないためスキップし、`n_single` カウンタに記録する。
+
+#### エッジ属性の付与規則
+
+```python
+row[attr] = app_no if attr == "patentApplicationNumber" else rec.get(attr, "")
+```
+
+`patentApplicationNumber` は `app_no` から直接セットし、`officeActionDate` 等その他の属性は **source 側の代表レコード** から取得する。同一ペアが複数の出願で共引用された場合は出願ごとに 1 行出力され、`extract_cited_image_pairs.py` 側で `events` 配列に集約する。
+
+---
+
 ### 実行方法
 
 ```bash
@@ -142,4 +180,8 @@ python build_edge_list.py 2007 2008
 
 ## 後続処理
 
-エッジリストを画像ペアに変換する手順は [image_pairs.md](image_pairs.md) を参照。
+| 目的 | スクリプト | ドキュメント |
+|------|-----------|-------------|
+| 画像ペア抽出 | `extract_cited_image_pairs.py` | [image_pairs.md](image_pairs.md) |
+| 意匠分類の付与 | `add_class_to_edge_list.py` | [edge_list_with_class.md](edge_list_with_class.md) |
+| 次数分布の可視化 | `plot_indegree.py` | [degree_distribution.md](degree_distribution.md) |
