@@ -4,22 +4,33 @@ USPTO 意匠特許共引用 ERGM 分析スクリプト
 build_ergm_input.py の出力 (ergm_input/) を対象に、
 優先度1→4 の順で全分析を実施する。
 
-優先度1: クラス分布・ヒートマップ    (attributes.txt, arc_list.txt)
-優先度2: 記述統計 density/degree    (attributes.txt, arc_list.txt)
-優先度3: ERGM 推定係数可視化        (EstimNetDirected 出力 *.csv)
-優先度4: Gemini Yes ペアとの突合     (similarity_results/*.jsonl, attributes.txt)
+優先度1: クラス分布・ヒートマップ         (attributes.txt, arc_list.txt)
+優先度2: 記述統計 density/degree         (attributes.txt, arc_list.txt)
+  Table 6 対応指標: density, mean_degree, transitivity, reciprocity, betweenness
+  ERGM 診断:       triangle/two-path 統計
+優先度3: ERGM 推定係数可視化             (EstimNetDirected 出力 *.csv)
+優先度4: Gemini Yes ペアとの突合         (similarity_results/*.jsonl, attributes.txt)
+Phase SW: Small-World 検証              (arc_list.txt)
 
 出力:
-  output/priority1_class_dist.png       D-class 別ノード数棒グラフ
-  output/priority1_n_classes_hist.png   n_classes 分布ヒストグラム
-  output/priority1_date_timeline.png    年代別ノード数折れ線
-  output/priority1_cocite_heatmap.png   クラス間共引用ヒートマップ (35×35)
-  output/priority2_degree_dist.png      次数分布 (PDF + CCDF)
-  output/priority2_descriptive.csv      記述統計サマリ
-  output/priority3_ergm_coefs.png       ERGM 係数プロット (EstimNetDirected 出力があれば)
-  output/priority4_gemini_vs_class.png  Gemini Yes/No のクラス分布比較
-  output/priority4_jaccard_vs_sim.png   Jaccard 類似度 vs Gemini 判定
-  output/analysis_summary.csv          全分析の数値サマリ
+  output/priority1_class_dist.png         D-class 別ノード数棒グラフ
+  output/priority1_n_classes_hist.png     n_classes 分布ヒストグラム
+  output/priority1_date_timeline.png      年代別ノード数折れ線
+  output/priority1_cocite_heatmap.png     クラス間共引用ヒートマップ (35×35)
+  output/priority2_degree_dist.png        次数分布 (PDF+CCDF × undirected/in/out)
+  output/priority2_network_stats.png      transitivity / reciprocity / betweenness 棒グラフ
+  output/priority2_descriptive.csv        記述統計サマリ (Table 6 完全対応)
+  output/priority2_triangle_twopath.csv   ERGM 収束診断用 triangle/two-path 統計
+  output/priority3_ergm_coefs.png         ERGM 係数プロット (EstimNetDirected 出力があれば)
+  output/priority4_gemini_vs_class.png    Gemini Yes/No のクラス分布比較
+  output/priority4_jaccard_vs_sim.png     Jaccard 類似度 vs Gemini 判定
+  output/phase4_smallworld.png            Small-World λ / γ 可視化
+  output/phase4_smallworld.csv            Small-World 指標 CSV
+  output/analysis_summary.csv            全分析の数値サマリ
+
+論文対応: Chakraborty et al. (2020) Table 6
+  density, mean_degree, transitivity (≈0.005), reciprocity (≈0.001),
+  betweenness (≈8.29e-06), λ (≈0.897), γ (≈2.346)
 """
 
 import argparse
@@ -27,6 +38,7 @@ import json
 import pickle
 import sys
 import warnings
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -80,21 +92,6 @@ def load_arc_list(arc_path: Path) -> list[tuple[int, int]]:
     return arcs
 
 
-def arc_list_to_undirected_degree(
-    arcs: list[tuple[int, int]], n_nodes: int
-) -> tuple[np.ndarray, int]:
-    """双方向アーク → 無向次数（重複を除く）"""
-    edges_set: set[tuple[int, int]] = set()
-    for u, v in arcs:
-        if u != v:
-            edges_set.add((min(u, v), max(u, v)))
-    deg = np.zeros(n_nodes, dtype=np.int32)
-    for u, v in edges_set:
-        deg[u] += 1
-        deg[v] += 1
-    return deg, len(edges_set)
-
-
 def _load_patent_cache(ergm_dir: Path) -> dict | None:
     """_patent_attr_cache.pkl をロードして返す。存在しない場合は None。"""
     cache_path = ergm_dir / "_patent_attr_cache.pkl"
@@ -102,6 +99,187 @@ def _load_patent_cache(ergm_dir: Path) -> dict | None:
         return None
     with open(cache_path, "rb") as f:
         return pickle.load(f)
+
+
+# ---------------------------------------------------------------------------
+# グラフデータ構築（一括）
+# ---------------------------------------------------------------------------
+def _build_graph_data(arcs: list[tuple[int, int]], n_nodes: int) -> dict:
+    """
+    アークリストから各種グラフ表現を一括構築する。
+    arc_set, edges_set, adj (無向隣接), in_deg, out_deg, undir_deg を返す。
+    """
+    arc_set: set[tuple[int, int]] = set()
+    edges_set: set[tuple[int, int]] = set()
+    adj: dict[int, set[int]] = defaultdict(set)
+    in_deg  = np.zeros(n_nodes, np.int32)
+    out_deg = np.zeros(n_nodes, np.int32)
+
+    for u, v in arcs:
+        if u == v:
+            continue
+        arc_set.add((u, v))
+        in_deg[v]  += 1
+        out_deg[u] += 1
+        key = (min(u, v), max(u, v))
+        if key not in edges_set:
+            edges_set.add(key)
+            adj[u].add(v)
+            adj[v].add(u)
+
+    undir_deg = np.array([len(adj.get(i, ())) for i in range(n_nodes)], np.int32)
+    return {
+        "arc_set":   arc_set,
+        "edges_set": edges_set,
+        "adj":       adj,
+        "in_deg":    in_deg,
+        "out_deg":   out_deg,
+        "undir_deg": undir_deg,
+        "M":         len(edges_set),
+    }
+
+
+# ---------------------------------------------------------------------------
+# グラフアルゴリズム
+# ---------------------------------------------------------------------------
+def _compute_transitivity(
+    edges_set: set[tuple[int, int]],
+    adj: dict[int, set[int]],
+    n_nodes: int,
+) -> tuple[int, int, float]:
+    """
+    三角形数・連結三つ組数・Transitivity（大域クラスタリング係数）を返す。
+    transitivity = 3 * triangles / connected_triples
+    """
+    triangles = sum(
+        len(adj.get(u, set()) & adj.get(v, set()))
+        for u, v in edges_set
+    )
+    triangles //= 3  # 各三角形はエッジを跨いで3回カウントされる
+
+    connected_triples = sum(
+        len(adj.get(i, set())) * (len(adj.get(i, set())) - 1) // 2
+        for i in range(n_nodes)
+        if len(adj.get(i, set())) >= 2
+    )
+    transitivity = 3 * triangles / connected_triples if connected_triples > 0 else 0.0
+    return triangles, connected_triples, transitivity
+
+
+def _compute_reciprocity(arc_set: set[tuple[int, int]]) -> float:
+    """有向グラフの相互性（双方向アーク数 / 全アーク数）を返す。"""
+    if not arc_set:
+        return 0.0
+    recip = sum(1 for (u, v) in arc_set if (v, u) in arc_set)
+    return recip / len(arc_set)
+
+
+def _find_lcc(adj: dict[int, set[int]], n_nodes: int) -> list[int]:
+    """最大連結成分（LCC）のノードリストを返す（DFS）。"""
+    visited: set[int] = set()
+    best: list[int] = []
+
+    for start in range(n_nodes):
+        if start in visited:
+            continue
+        comp: list[int] = []
+        stack = [start]
+        visited.add(start)
+        while stack:
+            node = stack.pop()
+            comp.append(node)
+            for nbr in adj.get(node, ()):
+                if nbr not in visited:
+                    visited.add(nbr)
+                    stack.append(nbr)
+        if len(comp) > len(best):
+            best = comp
+
+    return best
+
+
+def _avg_path_length_sample(
+    adj: dict[int, set[int]],
+    nodes: list[int],
+    k: int = 500,
+    seed: int = 42,
+) -> float:
+    """
+    k 個のランダムサンプルノードから BFS で平均最短路長を推定する。
+    到達不能ノードは除外して平均を取る。
+    """
+    rng = np.random.default_rng(seed)
+    sources = rng.choice(nodes, min(k, len(nodes)), replace=False)
+
+    total_dist = 0
+    n_pairs = 0
+    for src in sources:
+        dist = {src: 0}
+        queue = [src]
+        head = 0
+        while head < len(queue):
+            v = queue[head]; head += 1
+            for w in adj.get(v, ()):
+                if w not in dist:
+                    dist[w] = dist[v] + 1
+                    queue.append(w)
+        for d in dist.values():
+            if d > 0:
+                total_dist += d
+                n_pairs += 1
+
+    return total_dist / n_pairs if n_pairs > 0 else float("inf")
+
+
+def _compute_betweenness_approx(
+    adj: dict[int, set[int]],
+    n_nodes: int,
+    k: int = 200,
+    seed: int = 42,
+) -> np.ndarray:
+    """
+    Brandes アルゴリズムの k サンプル近似で betweenness 中心性を計算する。
+    正規化: (N/k) × 2/((N-1)(N-2)) （無向グラフ用）
+    """
+    rng = np.random.default_rng(seed)
+    sources = rng.choice(n_nodes, min(k, n_nodes), replace=False)
+    betweenness = np.zeros(n_nodes, np.float64)
+
+    for s in sources:
+        stack: list[int] = []
+        pred: dict[int, list[int]] = defaultdict(list)
+        sigma = np.zeros(n_nodes, np.float64)
+        dist  = np.full(n_nodes, -1, np.int32)
+
+        sigma[s] = 1.0
+        dist[s]  = 0
+        queue = [s]
+        head = 0
+
+        while head < len(queue):
+            v = queue[head]; head += 1
+            stack.append(v)
+            for w in adj.get(v, ()):
+                if dist[w] < 0:
+                    queue.append(w)
+                    dist[w] = dist[v] + 1
+                if dist[w] == dist[v] + 1:
+                    sigma[w] += sigma[v]
+                    pred[w].append(v)
+
+        delta = np.zeros(n_nodes, np.float64)
+        while stack:
+            w = stack.pop()
+            for v in pred[w]:
+                if sigma[w] > 0:
+                    delta[v] += (sigma[v] / sigma[w]) * (1.0 + delta[w])
+            if w != s:
+                betweenness[w] += delta[w]
+
+    if n_nodes > 2:
+        norm = (n_nodes / k) * 2.0 / ((n_nodes - 1) * (n_nodes - 2))
+        betweenness *= norm
+    return betweenness
 
 
 # ===========================================================================
@@ -171,10 +349,7 @@ def priority1_date_timeline(attrs: pd.DataFrame, out_dir: Path) -> None:
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=yearly["year"], y=yearly["count"],
-        mode="lines+markers",
-        fill="tozeroy",
-        line=dict(width=2),
-        name="Nodes",
+        mode="lines+markers", fill="tozeroy", line=dict(width=2), name="Nodes",
     ))
     fig.update_layout(
         title="Network Growth by Year<br>"
@@ -192,17 +367,15 @@ def priority1_date_timeline(attrs: pd.DataFrame, out_dir: Path) -> None:
 
 
 def priority1_cocite_heatmap(
-    attrs: pd.DataFrame,
-    arcs: list[tuple[int, int]],
-    out_dir: Path,
+    attrs: pd.DataFrame, arcs: list[tuple[int, int]], out_dir: Path,
 ) -> None:
     """クラス間共引用ヒートマップ (35×35)"""
     present = set(attrs["primary_class"].values)
     cls_list = [c for c in ALL_CLASSES if c in present]
-    cls_idx = {c: i for i, c in enumerate(cls_list)}
+    cls_idx  = {c: i for i, c in enumerate(cls_list)}
     node_cls = attrs["primary_class"].values
 
-    mat = np.zeros((len(cls_list), len(cls_list)), dtype=np.int64)
+    mat = np.zeros((len(cls_list), len(cls_list)), np.int64)
     seen: set[tuple[int, int]] = set()
     for u, v in arcs:
         if u == v:
@@ -219,13 +392,9 @@ def priority1_cocite_heatmap(
                 mat[cls_idx[cv], cls_idx[cu]] += 1
 
     log_mat = np.log1p(mat).astype(np.float32)
-
     fig = go.Figure(go.Heatmap(
-        z=log_mat,
-        x=cls_list,
-        y=cls_list,
-        colorscale="Blues",
-        colorbar=dict(title="log(1+count)"),
+        z=log_mat, x=cls_list, y=cls_list,
+        colorscale="Blues", colorbar=dict(title="log(1+count)"),
         hovertemplate="From %{y} → To %{x}<br>Edges: %{customdata:,}<extra></extra>",
         customdata=mat,
     ))
@@ -244,86 +413,372 @@ def priority1_cocite_heatmap(
 
 
 # ===========================================================================
-# 優先度 2: 記述統計 density/degree
+# 優先度 2: 記述統計 / Table 6 完全対応
 # ===========================================================================
 
 def priority2_descriptive(
     attrs: pd.DataFrame,
-    arcs: list[tuple[int, int]],
+    graph: dict,
     out_dir: Path,
+    betweenness_k: int = 200,
 ) -> dict:
-    """記述統計サマリを計算して CSV 保存"""
+    """
+    記述統計サマリ（Chakraborty et al. 2020 Table 6 完全対応）。
+    transitivity / reciprocity / betweenness を追加で計算する。
+    """
     N = len(attrs)
-    deg, M = arc_list_to_undirected_degree(arcs, N)
+    M = graph["M"]
+    undir_deg = graph["undir_deg"]
+    arc_set   = graph["arc_set"]
+    edges_set = graph["edges_set"]
+    adj       = graph["adj"]
 
     max_possible = N * (N - 1) / 2
     density = M / max_possible if max_possible > 0 else 0.0
 
+    # --- transitivity ---
+    print("  [P2] transitivity を計算中...")
+    n_tri, n_triples, transitivity = _compute_transitivity(edges_set, adj, N)
+
+    # --- reciprocity ---
+    reciprocity = _compute_reciprocity(arc_set)
+
+    # --- betweenness (k-sample Brandes) ---
+    print(f"  [P2] betweenness 近似計算中 (k={betweenness_k})...")
+    bc = _compute_betweenness_approx(adj, N, k=betweenness_k)
+    mean_betweenness = float(bc.mean())
+    max_betweenness  = float(bc.max())
+
+    # --- LCC ---
+    lcc_nodes = _find_lcc(adj, N)
+    lcc_size  = len(lcc_nodes)
+
     summary = {
-        "n_nodes": N,
-        "n_edges": M,
-        "n_arcs": len(arcs),
-        "density": density,
-        "mean_degree": float(deg.mean()),
-        "median_degree": float(np.median(deg)),
-        "max_degree": int(deg.max()),
-        "min_degree": int(deg.min()),
-        "std_degree": float(deg.std()),
-        "n_isolates": int((deg == 0).sum()),
-        "pct_multi_class": float((attrs["n_classes"] > 1).mean() * 100),
+        "n_nodes":          N,
+        "n_edges":          M,
+        "n_arcs":           len(arc_set),
+        "density":          density,
+        "mean_degree":      float(undir_deg.mean()),
+        "median_degree":    float(np.median(undir_deg)),
+        "max_degree":       int(undir_deg.max()),
+        "min_degree":       int(undir_deg.min()),
+        "std_degree":       float(undir_deg.std()),
+        "n_isolates":       int((undir_deg == 0).sum()),
+        "transitivity":     transitivity,
+        "reciprocity":      reciprocity,
+        "mean_betweenness": mean_betweenness,
+        "max_betweenness":  max_betweenness,
+        "lcc_size":         lcc_size,
+        "lcc_fraction":     lcc_size / N if N > 0 else 0.0,
+        "pct_multi_class":  float((attrs["n_classes"] > 1).mean() * 100),
         "unique_primary_classes": int(attrs["primary_class"].nunique()),
     }
 
     pd.DataFrame([summary]).to_csv(out_dir / "priority2_descriptive.csv", index=False)
     print(
-        f"  [P2] descriptive: N={N:,} M={M:,} "
-        f"density={density:.2e} mean_deg={summary['mean_degree']:.2f}"
+        f"  [P2] N={N:,} M={M:,} density={density:.2e} "
+        f"transitivity={transitivity:.4f} reciprocity={reciprocity:.4f} "
+        f"mean_bc={mean_betweenness:.3e}"
     )
-    return {"deg": deg, "M": M, "summary": summary}
+    return {"summary": summary, "lcc_nodes": lcc_nodes,
+            "bc": bc, "n_tri": n_tri, "n_triples": n_triples}
 
 
-def priority2_degree_dist(deg: np.ndarray, out_dir: Path) -> None:
-    """次数分布 PDF + CCDF (対数軸)"""
-    deg_pos = deg[deg > 0]
-    counts = np.bincount(deg_pos)
-    d_vals = np.arange(len(counts))
+def priority2_triangle_twopath(
+    n_tri: int,
+    n_triples: int,
+    arcs: list[tuple[int, int]],
+    adj: dict[int, set[int]],
+    n_nodes: int,
+    out_dir: Path,
+) -> None:
+    """
+    ERGM 収束診断用の Triangle / Two-path 統計を CSV 保存する。
+    AltKTriangleT (GWESP) と AltTwoPathsTD (GWDSP) の事前確認に使用。
+    """
+    # two-paths (directed): for each arc (u,v), count paths u→w→v (w ≠ u, v)
+    arc_set = set(map(tuple, arcs))
+    two_paths_directed = sum(
+        len(adj.get(u, set()) - {v})
+        for u, v in arc_set
+    )
 
-    ccdf_x, ccdf_y = [], []
-    cumsum = 0
-    for d in range(len(counts) - 1, -1, -1):
-        if counts[d] > 0:
-            cumsum += counts[d]
-            ccdf_x.append(d)
-            ccdf_y.append(cumsum / len(deg_pos))
-    ccdf_x = ccdf_x[::-1]
-    ccdf_y = ccdf_y[::-1]
+    stats = {
+        "n_triangles":           n_tri,
+        "n_connected_triples":   n_triples,
+        "triangle_to_triple_ratio": 3 * n_tri / n_triples if n_triples > 0 else 0.0,
+        "n_two_paths_directed":  two_paths_directed,
+        "n_arcs":                len(arc_set),
+        "two_path_per_arc":      two_paths_directed / len(arc_set) if arc_set else 0.0,
+    }
+
+    pd.DataFrame([stats]).to_csv(out_dir / "priority2_triangle_twopath.csv", index=False)
+    print(
+        f"  [P2] triangles={n_tri:,}  connected_triples={n_triples:,}  "
+        f"two_paths_directed={two_paths_directed:,}"
+    )
+
+
+def priority2_degree_dist(
+    undir_deg: np.ndarray,
+    in_deg: np.ndarray,
+    out_deg: np.ndarray,
+    out_dir: Path,
+) -> None:
+    """
+    無向・In・Out 次数の PDF + CCDF を対数軸で重ね描きする。
+    """
+    def _ccdf(deg_arr: np.ndarray) -> tuple[list, list]:
+        d_pos = deg_arr[deg_arr > 0]
+        if len(d_pos) == 0:
+            return [], []
+        cnt = np.bincount(d_pos)
+        xs, ys, cum = [], [], 0
+        for d in range(len(cnt) - 1, -1, -1):
+            if cnt[d] > 0:
+                cum += cnt[d]
+                xs.append(d)
+                ys.append(cum / len(d_pos))
+        return xs[::-1], ys[::-1]
+
+    colors = {"Undirected": "#1f77b4", "In-degree": "#2ca02c", "Out-degree": "#d62728"}
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=d_vals[d_vals > 0],
-        y=counts[d_vals > 0] / len(deg_pos),
-        name="PDF",
-        opacity=0.6,
-    ))
-    fig.add_trace(go.Scatter(
-        x=ccdf_x, y=ccdf_y,
-        mode="lines",
-        name="CCDF",
-        line=dict(width=2),
-    ))
+    for label, deg_arr in [("Undirected", undir_deg), ("In-degree", in_deg), ("Out-degree", out_deg)]:
+        d_pos = deg_arr[deg_arr > 0]
+        if len(d_pos) == 0:
+            continue
+        cnt = np.bincount(d_pos)
+        d_vals = np.arange(len(cnt))
+        pdf = cnt / len(d_pos)
+        # PDF (bar → scatter for log-log readability)
+        fig.add_trace(go.Scatter(
+            x=d_vals[d_vals > 0], y=pdf[d_vals > 0],
+            mode="markers", name=f"{label} PDF",
+            marker=dict(color=colors[label], size=4, opacity=0.6),
+        ))
+        # CCDF
+        cx, cy = _ccdf(deg_arr)
+        fig.add_trace(go.Scatter(
+            x=cx, y=cy, mode="lines", name=f"{label} CCDF",
+            line=dict(color=colors[label], width=2),
+        ))
+
     fig.update_layout(
         title="Degree Distribution (PDF & CCDF)<br>"
               "<span style='font-size:14px;font-weight:normal;'>"
-              "Log-log scale; undirected co-citation network</span>",
-        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5),
+              "Log-log scale; undirected / in / out degree</span>",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
     )
     fig.update_xaxes(title_text="Degree", type="log")
     fig.update_yaxes(title_text="Probability", type="log")
     out_path = out_dir / "priority2_degree_dist.png"
     fig.write_image(str(out_path))
     save_meta(out_path, "Degree Distribution (PDF & CCDF)",
-              "Log-log degree distribution and CCDF of the co-citation network.")
+              "Log-log degree distribution (undirected/in/out) and CCDF.")
     print("  [P2] degree_dist done")
+
+
+def priority2_network_stats(summary: dict, out_dir: Path) -> None:
+    """
+    Transitivity / Reciprocity / Mean Betweenness の棒グラフ。
+    論文 Table 6 の主要指標を視覚化する。
+    """
+    metrics = {
+        "Transitivity":       summary["transitivity"],
+        "Reciprocity":        summary["reciprocity"],
+        "Mean Betweenness":   summary["mean_betweenness"],
+        "Density":            summary["density"],
+    }
+    # 論文参考値（Chakraborty et al. 2020）
+    paper_ref = {
+        "Transitivity":     0.005,
+        "Reciprocity":      0.001,
+        "Mean Betweenness": 8.29e-6,
+        "Density":          None,
+    }
+
+    names = list(metrics.keys())
+    vals  = [metrics[n] for n in names]
+    refs  = [paper_ref.get(n) for n in names]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name="This network", x=names, y=vals,
+        text=[f"{v:.3e}" for v in vals], textposition="outside",
+        marker_color="#1f77b4",
+    ))
+    # 参考値をライン表示（あるものだけ）
+    for i, (n, r) in enumerate(zip(names, refs)):
+        if r is not None:
+            fig.add_shape(
+                type="line", x0=i - 0.4, x1=i + 0.4,
+                y0=r, y1=r,
+                line=dict(color="red", width=2, dash="dash"),
+            )
+    # 凡例用ダミートレース
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="lines",
+        line=dict(color="red", dash="dash"),
+        name="Paper ref (Chakraborty 2020)",
+    ))
+    fig.update_layout(
+        title="Network Statistics (Table 6 Comparison)<br>"
+              "<span style='font-size:14px;font-weight:normal;'>"
+              "Dashed red = paper reference values</span>",
+        yaxis_type="log",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+    )
+    fig.update_xaxes(title_text="Metric")
+    fig.update_yaxes(title_text="Value (log scale)")
+    out_path = out_dir / "priority2_network_stats.png"
+    fig.write_image(str(out_path))
+    save_meta(out_path, "Network Statistics (Table 6 Comparison)",
+              "Bar chart comparing key network statistics against paper reference values.")
+    print("  [P2] network_stats done")
+
+
+# ===========================================================================
+# Phase SW: Small-World 検証（Chakraborty et al. 2020 Table 6）
+# ===========================================================================
+
+def _build_er_adj(n: int, m: int, seed: int) -> dict[int, set[int]]:
+    """G(n, m) Erdős-Rényi ランダムグラフを rejection sampling で生成。"""
+    rng = np.random.default_rng(seed)
+    adj: dict[int, set[int]] = defaultdict(set)
+    added = 0
+    while added < m:
+        u = int(rng.integers(0, n))
+        v = int(rng.integers(0, n))
+        if u != v and v not in adj[u]:
+            adj[u].add(v)
+            adj[v].add(u)
+            added += 1
+    return adj
+
+
+def phase4_small_world(
+    adj: dict[int, set[int]],
+    edges_set: set[tuple[int, int]],
+    n_nodes: int,
+    out_dir: Path,
+    er_samples: int = 5,
+    path_k: int = 500,
+) -> dict:
+    """
+    Watts-Strogatz Small-World 検証。
+      λ = C_real / C_ER  （クラスタリング比）
+      γ = L_real / L_ER  （平均最短路長比）
+      σ = λ / γ          （Small-World index; σ >> 1 ならば Small-World）
+
+    論文参考値: λ=0.897, γ=2.346 → σ≈0.382 （Small-World でない）
+    """
+    N = n_nodes
+    M = len(edges_set)
+
+    # --- LCC の特定 ---
+    print("  [SW] LCC を特定中...")
+    lcc_nodes = _find_lcc(adj, N)
+    N_lcc = len(lcc_nodes)
+    lcc_set = set(lcc_nodes)
+    M_lcc = sum(1 for u, v in edges_set if u in lcc_set and v in lcc_set)
+
+    print(f"  [SW] LCC: {N_lcc:,} nodes ({N_lcc/N*100:.1f}%), {M_lcc:,} edges")
+
+    # --- C_real（実ネットワークの Transitivity） ---
+    _, _, c_real = _compute_transitivity(edges_set, adj, N)
+
+    # --- L_real（LCC の平均最短路長、BFS サンプリング） ---
+    print(f"  [SW] L_real を BFS サンプリング中 (k={path_k})...")
+    l_real = _avg_path_length_sample(adj, lcc_nodes, k=path_k, seed=42)
+
+    # --- C_ER（解析値: ER グラフの期待クラスタリング = 密度） ---
+    c_er = 2 * M_lcc / (N_lcc * (N_lcc - 1)) if N_lcc > 1 else 0.0
+
+    # --- L_ER（ER ランダムグラフのシミュレーション） ---
+    # er_samples=0 の場合は解析近似 ln(N)/ln(k_avg) を使用
+    k_avg_lcc = 2 * M_lcc / N_lcc if N_lcc > 0 else 1.0
+    l_er_analytic = np.log(N_lcc) / np.log(k_avg_lcc) if k_avg_lcc > 1 else float("inf")
+
+    if er_samples > 0:
+        print(f"  [SW] ER ランダムグラフ {er_samples} 回シミュレーション中...")
+        l_er_sims = []
+        for trial in range(er_samples):
+            er_adj = _build_er_adj(N_lcc, M_lcc, seed=42 + trial)
+            er_nodes = list(range(N_lcc))
+            l_sim = _avg_path_length_sample(
+                er_adj, er_nodes, k=min(100, N_lcc), seed=42 + trial,
+            )
+            l_er_sims.append(l_sim)
+            print(f"    trial {trial+1}/{er_samples}: L_ER={l_sim:.4f}")
+        l_er = float(np.mean(l_er_sims))
+        l_er_std = float(np.std(l_er_sims))
+    else:
+        l_er = l_er_analytic
+        l_er_std = 0.0
+
+    lam   = c_real / c_er  if c_er  > 0 else float("inf")
+    gam   = l_real / l_er  if l_er  > 0 and l_er != float("inf") else float("inf")
+    sigma = lam    / gam   if gam   > 0 and gam   != float("inf") else float("inf")
+    is_sw = sigma > 1.0 and gam < 2.0
+
+    print(
+        f"  [SW] C_real={c_real:.5f}  L_real={l_real:.4f}\n"
+        f"       C_ER  ={c_er:.5f}  L_ER  ={l_er:.4f} (analytic={l_er_analytic:.4f})\n"
+        f"       λ={lam:.4f}  γ={gam:.4f}  σ={sigma:.4f}  "
+        f"→ {'Small-World' if is_sw else 'NOT Small-World'}"
+    )
+
+    result = {
+        "N_lcc": N_lcc, "M_lcc": M_lcc,
+        "C_real": c_real, "L_real": l_real,
+        "C_ER":  c_er,   "L_ER":  l_er, "L_ER_std": l_er_std,
+        "L_ER_analytic": l_er_analytic,
+        "lambda": lam, "gamma": gam, "sigma": sigma,
+        "is_small_world": is_sw,
+        "paper_lambda": 0.897, "paper_gamma": 2.346,
+    }
+    pd.DataFrame([result]).to_csv(out_dir / "phase4_smallworld.csv", index=False)
+
+    # --- プロット ---
+    fig = go.Figure()
+
+    # λ / γ 比較バー（実測 vs 論文）
+    categories = ["λ (C_real/C_ER)", "γ (L_real/L_ER)"]
+    this_vals  = [lam, gam]
+    paper_vals = [0.897, 2.346]
+
+    fig.add_trace(go.Bar(
+        name="This network", x=categories, y=this_vals,
+        text=[f"{v:.3f}" for v in this_vals], textposition="outside",
+        marker_color="#1f77b4",
+    ))
+    fig.add_trace(go.Bar(
+        name="Paper (Chakraborty 2020)", x=categories, y=paper_vals,
+        text=[f"{v:.3f}" for v in paper_vals], textposition="outside",
+        marker_color="#ff7f0e", opacity=0.6,
+    ))
+    fig.add_hline(y=1.0, line_dash="dash", line_color="gray", line_width=1,
+                  annotation_text="1.0 (ER baseline)")
+
+    fig.update_layout(
+        barmode="group",
+        title=(
+            f"Small-World Analysis (λ={lam:.3f}, γ={gam:.3f}, σ={sigma:.3f})<br>"
+            "<span style='font-size:13px;font-weight:normal;'>"
+            f"{'✓ Small-World (σ>1)' if is_sw else '✗ Not Small-World (σ≤1)'}"
+            " | Paper ref: λ=0.897, γ=2.346</span>"
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="center", x=0.5),
+    )
+    fig.update_xaxes(title_text="Metric")
+    fig.update_yaxes(title_text="Ratio (real / ER random)")
+    out_path = out_dir / "phase4_smallworld.png"
+    fig.write_image(str(out_path))
+    save_meta(out_path, f"Small-World Analysis (λ={lam:.3f}, γ={gam:.3f})",
+              "Comparison of clustering and path-length ratios against ER random graph.")
+    print("  [SW] smallworld done")
+    return result
 
 
 # ===========================================================================
@@ -380,14 +835,12 @@ def priority3_ergm_coefs(ergm_dir: Path, out_dir: Path) -> bool:
         fig.add_shape(
             type="line",
             x0=row["ci_low"], x1=row["ci_high"],
-            y0=row["param"], y1=row["param"],
+            y0=row["param"],  y1=row["param"],
             line=dict(color="gray", width=1),
         )
     fig.add_trace(go.Scatter(
         x=df["theta"], y=df["param"],
-        mode="markers",
-        marker=dict(color=colors, size=8),
-        name="θ",
+        mode="markers", marker=dict(color=colors, size=8), name="θ",
     ))
     fig.add_vline(x=0, line_dash="dash", line_color="black", line_width=1)
     fig.update_layout(
@@ -411,7 +864,6 @@ def priority3_ergm_coefs(ergm_dir: Path, out_dir: Path) -> bool:
 # ===========================================================================
 
 def _load_similarity_results(sim_dir: Path) -> pd.DataFrame | None:
-    """similarity_results/ 以下の .jsonl を統合して DataFrame を返す。"""
     records = []
     for p in sorted(sim_dir.glob("*.jsonl")):
         with open(p) as f:
@@ -423,13 +875,10 @@ def _load_similarity_results(sim_dir: Path) -> pd.DataFrame | None:
                     records.append(json.loads(line))
                 except json.JSONDecodeError:
                     pass
-    if not records:
-        return None
-    return pd.DataFrame(records)
+    return pd.DataFrame(records) if records else None
 
 
 def _normalize_sim_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """JSONL の列名を統一する（source/target → id_a/id_b、similarity 正規化）。"""
     col_map = {}
     for col in df.columns:
         lc = col.lower()
@@ -443,21 +892,14 @@ def _normalize_sim_cols(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def priority4_gemini_vs_class(
-    patent_cache: dict | None,
-    sim_dir: Path,
-    out_dir: Path,
+    patent_cache: dict | None, sim_dir: Path, out_dir: Path,
 ) -> bool:
-    """
-    Gemini Yes/No のクラス分布比較。
-    patent_cache (_patent_attr_cache.pkl) から直接クラス情報を引く。
-    """
     sim_df = _load_similarity_results(sim_dir)
     if sim_df is None:
         print("  [P4] similarity_results が見つかりません。スキップします。")
         return False
 
     sim_df = _normalize_sim_cols(sim_df)
-
     if "similarity" not in sim_df.columns:
         print(f"  [P4] 'similarity' 列が見つかりません。列: {sim_df.columns.tolist()}")
         return False
@@ -468,10 +910,9 @@ def priority4_gemini_vs_class(
 
     if patent_cache is not None and "id_a" in sim_df.columns:
         def _get_primary(pid: str) -> str:
-            entry = patent_cache.get(str(pid), {})
-            return entry.get("primary_class", "Unknown")
+            return patent_cache.get(str(pid), {}).get("primary_class", "Unknown")
 
-        sim_df["cls_a"] = sim_df["id_a"].map(_get_primary)
+        sim_df["cls_a"]     = sim_df["id_a"].map(_get_primary)
         sim_df["same_class"] = sim_df["cls_a"] == sim_df["id_b"].map(_get_primary)
 
         yes_cls = sim_df[is_yes]["cls_a"].value_counts().reindex(ALL_CLASSES, fill_value=0)
@@ -516,13 +957,6 @@ def priority4_jaccard_vs_sim(
     jac_path: Path,
     node_list: list[str] | None = None,
 ) -> bool:
-    """
-    Jaccard 類似度 vs Gemini 判定（箱ひげ図）。
-
-    node_list: attributes.txt の行順に対応する特許IDのリスト。
-               None の場合は patent_cache のソート済みキーを使うが、
-               edge list に含まれないノードも含むため不正確になる可能性がある。
-    """
     if not jac_path.exists():
         print(f"  [P4] {jac_path.name} が見つかりません。スキップします。")
         return False
@@ -537,26 +971,20 @@ def priority4_jaccard_vs_sim(
         print("  [P4] id_a / id_b 列が見つかりません。スキップします。")
         return False
 
-    # ノードID → 行インデックスのマップを構築
     if node_list is not None:
         id_to_row = {pid: i for i, pid in enumerate(node_list)}
     elif patent_cache is not None:
-        # patent_cache のソート済みキーを使う（build_ergm_input.py と同じ sorted() を適用）
         print("  [P4] node_list 未指定。patent_cache のソート済みキーで代用します。")
         id_to_row = {pid: i for i, pid in enumerate(sorted(patent_cache.keys()))}
     else:
         print("  [P4] ノード順が不明なため Jaccard 分析をスキップします。")
-        print("       --edge-dir を指定するか node_list を渡してください。")
         return False
 
     print(f"  [P4] Jaccard 行列をメモリマップでロード中: {jac_path}")
-    # class_sim_jaccard.npy は build_ergm_input.py が出力した float32 密行列
-    N = len(id_to_row)
     jac = np.load(str(jac_path), mmap_mode="r")
 
     jac_vals, labels = [], []
-    sample_limit = 50_000
-    for _, row in sim_df.head(sample_limit).iterrows():
+    for _, row in sim_df.head(50_000).iterrows():
         i = id_to_row.get(str(row.get("id_a", "")))
         j = id_to_row.get(str(row.get("id_b", "")))
         if i is None or j is None or i >= jac.shape[0] or j >= jac.shape[1]:
@@ -570,10 +998,8 @@ def priority4_jaccard_vs_sim(
         return False
 
     df_plot = pd.DataFrame({"jaccard": jac_vals, "gemini": labels})
-
     fig = px.box(
-        df_plot, x="gemini", y="jaccard",
-        color="gemini",
+        df_plot, x="gemini", y="jaccard", color="gemini",
         title="Jaccard Similarity vs Gemini Judgment<br>"
               "<span style='font-size:14px;font-weight:normal;'>"
               "D-class Jaccard score for Gemini Yes/No pairs</span>",
@@ -594,8 +1020,10 @@ def priority4_jaccard_vs_sim(
 # 分析サマリ CSV
 # ===========================================================================
 
-def save_analysis_summary(summary: dict, out_dir: Path) -> None:
+def save_analysis_summary(summary: dict, sw_result: dict | None, out_dir: Path) -> None:
     rows = [{"metric": k, "value": v} for k, v in summary.items()]
+    if sw_result:
+        rows += [{"metric": f"sw_{k}", "value": v} for k, v in sw_result.items()]
     pd.DataFrame(rows).to_csv(out_dir / "analysis_summary.csv", index=False)
     print(f"  [Summary] {out_dir / 'analysis_summary.csv'}")
 
@@ -606,7 +1034,7 @@ def save_analysis_summary(summary: dict, out_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="USPTO 意匠特許 ERGM 分析スクリプト（優先度 1–4）"
+        description="USPTO 意匠特許 ERGM 分析スクリプト（優先度 1–4 + Small-World）"
     )
     parser.add_argument(
         "--ergm-dir", default="ergm_input",
@@ -614,21 +1042,26 @@ def main() -> None:
     )
     parser.add_argument(
         "--sim-dir", default="/mnt/eightthdd/uspto/similarity_results",
-        help="Gemini 類似判定 jsonl のディレクトリ "
-             "(default: /mnt/eightthdd/uspto/similarity_results)",
+        help="Gemini 類似判定 jsonl のディレクトリ",
     )
     parser.add_argument(
         "--out-dir", default="output",
         help="グラフ・CSV の出力先 (default: output)",
     )
     parser.add_argument(
-        "--skip-p3", action="store_true",
-        help="優先度3（ERGM係数可視化）をスキップ",
+        "--betweenness-k", type=int, default=200, metavar="K",
+        help="Betweenness 近似の BFS ソース数 (default: 200)",
     )
     parser.add_argument(
-        "--skip-p4", action="store_true",
-        help="優先度4（Gemini突合）をスキップ",
+        "--er-samples", type=int, default=5, metavar="N",
+        help="Small-World の ER ランダムグラフ試行数 (default: 5, 0=解析近似のみ)",
     )
+    parser.add_argument("--skip-p3", action="store_true",
+                        help="優先度3（ERGM係数可視化）をスキップ")
+    parser.add_argument("--skip-p4", action="store_true",
+                        help="優先度4（Gemini突合）をスキップ")
+    parser.add_argument("--skip-sw", action="store_true",
+                        help="Small-World 検証をスキップ")
     args = parser.parse_args()
 
     ergm_dir = Path(args.ergm_dir)
@@ -640,26 +1073,29 @@ def main() -> None:
     arc_path  = ergm_dir / "arc_list.txt"
     jac_path  = ergm_dir / "class_sim_jaccard.npy"
 
-    if not attr_path.exists():
-        print(f"エラー: {attr_path} が見つかりません。", file=sys.stderr)
-        sys.exit(1)
-    if not arc_path.exists():
-        print(f"エラー: {arc_path} が見つかりません。", file=sys.stderr)
-        sys.exit(1)
+    for p in (attr_path, arc_path):
+        if not p.exists():
+            print(f"エラー: {p} が見つかりません。", file=sys.stderr)
+            sys.exit(1)
 
     print(f"ロード中: {attr_path}")
     attrs = pd.read_csv(attr_path, sep="\t", low_memory=False)
-    print(f"  ノード数: {len(attrs):,}")
+    N = len(attrs)
+    print(f"  ノード数: {N:,}")
 
     print(f"ロード中: {arc_path}")
     arcs = load_arc_list(arc_path)
     print(f"  アーク数: {len(arcs):,}")
 
+    print("グラフデータ構築中...")
+    graph = _build_graph_data(arcs, N)
+    print(f"  無向エッジ数: {graph['M']:,}")
+
     patent_cache = _load_patent_cache(ergm_dir)
     if patent_cache:
         print(f"  patent_cache ロード済み: {len(patent_cache):,} 件")
     else:
-        print("  patent_cache なし（優先度4のクラス別集計は制限されます）")
+        print("  patent_cache なし（P4 クラス別集計は制限されます）")
 
     # ---------- 優先度 1 ----------
     print("\n=== 優先度1: クラス分布・ヒートマップ ===")
@@ -669,9 +1105,15 @@ def main() -> None:
     priority1_cocite_heatmap(attrs, arcs, out_dir)
 
     # ---------- 優先度 2 ----------
-    print("\n=== 優先度2: 記述統計 ===")
-    p2 = priority2_descriptive(attrs, arcs, out_dir)
-    priority2_degree_dist(p2["deg"], out_dir)
+    print("\n=== 優先度2: 記述統計（Table 6 完全対応） ===")
+    p2 = priority2_descriptive(attrs, graph, out_dir, betweenness_k=args.betweenness_k)
+    priority2_triangle_twopath(
+        p2["n_tri"], p2["n_triples"], arcs, graph["adj"], N, out_dir,
+    )
+    priority2_degree_dist(
+        graph["undir_deg"], graph["in_deg"], graph["out_deg"], out_dir,
+    )
+    priority2_network_stats(p2["summary"], out_dir)
 
     # ---------- 優先度 3 ----------
     if not args.skip_p3:
@@ -687,24 +1129,40 @@ def main() -> None:
         else:
             print(f"\n=== 優先度4: {sim_dir} が存在しません。スキップします。===")
 
+    # ---------- Small-World ----------
+    sw_result: dict | None = None
+    if not args.skip_sw:
+        print("\n=== Small-World 検証（Chakraborty et al. 2020 Table 6） ===")
+        sw_result = phase4_small_world(
+            graph["adj"], graph["edges_set"], N, out_dir,
+            er_samples=args.er_samples,
+        )
+
     # ---------- サマリ ----------
     summary = p2["summary"]
-    save_analysis_summary(summary, out_dir)
+    save_analysis_summary(summary, sw_result, out_dir)
 
     print(f"\n完了 → {out_dir}/")
-    print(f"  ノード数:        {summary['n_nodes']:,}")
-    print(f"  エッジ数:        {summary['n_edges']:,}")
-    print(f"  密度:            {summary['density']:.3e}")
-    print(f"  平均次数:        {summary['mean_degree']:.2f}")
-    print(f"  多クラス特許率:  {summary['pct_multi_class']:.1f}%")
+    print(f"  ノード数:          {summary['n_nodes']:,}")
+    print(f"  エッジ数:          {summary['n_edges']:,}")
+    print(f"  密度:              {summary['density']:.3e}")
+    print(f"  平均次数:          {summary['mean_degree']:.2f}")
+    print(f"  Transitivity:      {summary['transitivity']:.5f}")
+    print(f"  Reciprocity:       {summary['reciprocity']:.5f}")
+    print(f"  Mean Betweenness:  {summary['mean_betweenness']:.3e}")
+    if sw_result:
+        print(f"  λ (C_real/C_ER):  {sw_result['lambda']:.4f}")
+        print(f"  γ (L_real/L_ER):  {sw_result['gamma']:.4f}")
+        print(f"  σ (SW index):      {sw_result['sigma']:.4f}")
 
 
 if __name__ == "__main__":
     # 使い方:
-    #   python analyze_ergm.py                                         # デフォルト
-    #   python analyze_ergm.py --ergm-dir ./ergm_input                 # 出力先を指定
-    #   python analyze_ergm.py --sim-dir ./sim_results                 # Gemini 結果先を指定
-    #   python analyze_ergm.py --out-dir ./my_output                   # 出力先を指定
-    #   python analyze_ergm.py --skip-p3                               # ERGM 係数をスキップ
-    #   python analyze_ergm.py --skip-p4                               # Gemini 突合をスキップ
+    #   python analyze_ergm.py                            # デフォルト（全分析）
+    #   python analyze_ergm.py --skip-p3 --skip-p4       # 記述統計のみ高速実行
+    #   python analyze_ergm.py --skip-sw                  # Small-World をスキップ
+    #   python analyze_ergm.py --betweenness-k 1000      # Betweenness 精度を上げる
+    #   python analyze_ergm.py --er-samples 10           # ER 試行数を増やす
+    #   python analyze_ergm.py --er-samples 0            # ER 解析近似のみ（高速）
+    #   python analyze_ergm.py --out-dir ./my_output     # 出力先を変更
     main()

@@ -366,11 +366,15 @@ EstimNetDirected model.cfg
 | `output/priority1_n_classes_hist.png` | 1 | n_classes 分布ヒストグラム |
 | `output/priority1_date_timeline.png` | 1 | 年代別ノード数折れ線 |
 | `output/priority1_cocite_heatmap.png` | 1 | クラス間共引用ヒートマップ（35×35） |
-| `output/priority2_degree_dist.png` | 2 | 次数分布（PDF + CCDF、対数軸） |
-| `output/priority2_descriptive.csv` | 2 | 記述統計サマリ（N, M, density 等） |
+| `output/priority2_degree_dist.png` | 2 | 次数分布（無向・In・Out の PDF+CCDF、対数軸） |
+| `output/priority2_network_stats.png` | 2 | Transitivity / Reciprocity / Betweenness 棒グラフ（論文 Table 6 比較） |
+| `output/priority2_descriptive.csv` | 2 | 記述統計サマリ（Table 6 完全対応） |
+| `output/priority2_triangle_twopath.csv` | 2 | ERGM 収束診断用 triangle/two-path 統計 |
 | `output/priority3_ergm_coefs.png` | 3 | ERGM 係数フォレストプロット |
 | `output/priority4_gemini_vs_class.png` | 4 | Gemini Yes/No のクラス分布比較 |
 | `output/priority4_jaccard_vs_sim.png` | 4 | Jaccard 類似度 vs Gemini 判定（箱ひげ図） |
+| `output/phase4_smallworld.png` | SW | Small-World λ / γ 可視化（論文比較） |
+| `output/phase4_smallworld.csv` | SW | Small-World 指標（λ, γ, σ, L_real, C_real 等） |
 | `output/analysis_summary.csv` | — | 全分析の数値サマリ |
 
 各 PNG には `.meta.json`（caption / description）が付随する。
@@ -378,14 +382,20 @@ EstimNetDirected model.cfg
 ### 実行方法
 
 ```bash
-# デフォルト（ergm_input/ + /mnt/eightthdd/uspto/similarity_results/）
+# デフォルト（全分析）
 python analyze_ergm.py
 
-# 優先度4（Gemini突合）をスキップ
-python analyze_ergm.py --skip-p4
+# 記述統計のみ高速実行（P3/P4/Small-World をスキップ）
+python analyze_ergm.py --skip-p3 --skip-p4 --skip-sw
 
-# EstimNetDirected 実行前（優先度3をスキップ）
-python analyze_ergm.py --skip-p3
+# Betweenness の精度を上げる（時間と精度のトレードオフ）
+python analyze_ergm.py --betweenness-k 1000
+
+# ER null model の試行数を増やす（Small-World 結果の安定化）
+python analyze_ergm.py --er-samples 10
+
+# ER 解析近似のみ（シミュレーションなし、高速）
+python analyze_ergm.py --er-samples 0
 
 # 出力先を変更
 python analyze_ergm.py --out-dir ./my_output
@@ -396,8 +406,54 @@ python analyze_ergm.py --out-dir ./my_output
 | `--ergm-dir` | `ergm_input` | `build_ergm_input.py` の出力ディレクトリ |
 | `--sim-dir` | `/mnt/eightthdd/uspto/similarity_results` | Gemini 判定 JSONL のディレクトリ |
 | `--out-dir` | `output` | グラフ・CSV の出力先 |
+| `--betweenness-k` | `200` | Betweenness 近似の BFS ソース数（大きいほど精度向上） |
+| `--er-samples` | `5` | Small-World の ER ランダムグラフ試行数（0=解析近似のみ） |
 | `--skip-p3` | — | 優先度3（ERGM係数可視化）をスキップ |
 | `--skip-p4` | — | 優先度4（Gemini突合）をスキップ |
+| `--skip-sw` | — | Small-World 検証をスキップ |
+
+### 論文 Table 6 対応指標
+
+`priority2_descriptive.csv` に出力される指標と Chakraborty et al. (2020) の参考値:
+
+| 指標 | 論文参考値 | 実装 |
+|------|----------|------|
+| Density | — | `2M / (N(N-1))` |
+| Mean degree | — | `undir_deg.mean()` |
+| Transitivity | 0.005 | `3 × triangles / connected_triples`（エッジ共通隣接数ベース） |
+| Reciprocity | 0.001 | `bidirectional_arcs / total_arcs` |
+| Mean Betweenness | 8.29e-06 | Brandes k-sample 近似（`--betweenness-k` で調整） |
+
+### Small-World 検証（`phase4_small_world()`）
+
+Watts-Strogatz (1998) に基づく Small-World 指標を計算する。
+
+```
+λ = C_real / C_ER     （クラスタリング比）
+γ = L_real / L_ER     （平均最短路長比）
+σ = λ / γ             （Small-World index; σ >> 1 ならば Small-World）
+```
+
+| 量 | 計算方法 |
+|----|---------|
+| `C_real` | 実ネットワークの Transitivity（全体） |
+| `L_real` | LCC 内 BFS サンプリング（500 ノードから平均） |
+| `C_ER` | `2M / (N(N-1))` = 密度（ER の解析的期待値） |
+| `L_ER` | ER ランダムグラフ `G(N_lcc, M_lcc)` を `--er-samples` 回生成し BFS 平均、または `ln(N)/ln(k_avg)` 近似 |
+
+論文参考値: λ=0.897, γ=2.346 → σ≈0.382 (NOT Small-World)
+
+### ERGM 収束診断（`priority2_triangle_twopath.csv`）
+
+EstimNetDirected の `AltKTriangleT`（GWESP）・`AltTwoPathsTD`（GWDSP）が収束しない場合の原因特定に使用する。
+
+| 指標 | 内容 |
+|------|------|
+| `n_triangles` | 実ネットワーク内の三角形数 |
+| `n_connected_triples` | 連結三つ組数（次数 ≥ 2 のノード中心） |
+| `triangle_to_triple_ratio` | `3 × n_triangles / n_connected_triples`（= Transitivity） |
+| `n_two_paths_directed` | 有向2パス数（`u→w→v` の形） |
+| `two_path_per_arc` | アーク1本あたりの平均2パス数 |
 
 ### 優先度4の特許ID解決
 
