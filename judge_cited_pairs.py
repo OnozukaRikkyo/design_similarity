@@ -227,7 +227,7 @@ def process_year(
                         if "429" in err or "RESOURCE_EXHAUSTED" in err:
                             m = re.search(r"retry in ([\d.]+)s", err)
                             base = float(m.group(1)) + 5 if m else RETRY_WAIT_SEC
-                            wait = base * (attempt * 10)
+                            wait = (base * (attempt + 1)) * 10
                             if attempt < MAX_RETRIES:
                                 tqdm.write(f"  [429] クォータ超過。{wait:.1f}秒後にリトライ ({attempt + 1}/{MAX_RETRIES})...", file=sys.stderr)
                                 time.sleep(wait)
