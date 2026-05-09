@@ -322,12 +322,12 @@ python analyze_ergm.py --skip-p4
 | 入力 | `ergm_input/attributes.txt` | タブ区切り CSV |
 | 入力 | `ergm_input/_patent_attr_cache.pkl` | pickle（任意） |
 | 入力 | `/mnt/eightthdd/uspto/similarity_results/*.jsonl` | JSONL（`--sim-dir` 時のみ） |
-| 出力 | `output/network_patent_graph.html` | Plotly インタラクティブ HTML |
-| 出力 | `output/network_class_graph.html` | Plotly インタラクティブ HTML |
-| 出力 | `output/network_class_graph.png` | 静止画 PNG |
+| 出力 | `output/network_patent_graph.png` | 300 DPI PNG（特許サブグラフ） |
+| 出力 | `output/network_class_graph.png` | 300 DPI PNG（D-class 集約） |
+| 出力 | `output/network_degree_dist.png` | 300 DPI PNG（次数分布） |
 | 出力 | `output/network_summary.csv` | グラフ要約統計 |
 
-**処理内容**: STEP 2d の出力から NetworkX グラフを構築し、インタラクティブ Plotly HTML として出力する。ノード色は D-class、サイズは degree。STEP 3 の Gemini Yes ペアをオプションで橙色エッジとして重ね描きできる。STEP 2d の出力のみに依存し、独立して実行可能。
+**処理内容**: STEP 2d の出力から NetworkX グラフを構築し、論文品質 PNG を出力する。ノード色は D-class（35 色パレット）、ノードサイズは degree（log スケール）、エッジ太さはクラス間共引用本数（D-class 図）、次数分布は log-log + べき乗則フィット。STEP 3 の Gemini Yes ペアをオプションで橙色エッジとして重ね描きできる。STEP 2d の出力のみに依存し、独立して実行可能。
 
 ```bash
 # デフォルト（degree 上位 250 件 + 1-hop）
