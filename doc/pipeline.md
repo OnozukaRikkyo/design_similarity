@@ -322,12 +322,16 @@ python analyze_ergm.py --skip-p4
 | 入力 | `ergm_input/attributes.txt` | タブ区切り CSV |
 | 入力 | `ergm_input/_patent_attr_cache.pkl` | pickle（任意） |
 | 入力 | `/mnt/eightthdd/uspto/similarity_results/*.jsonl` | JSONL（`--sim-dir` 時のみ） |
-| 出力 | `output/network_patent_graph.png` | 300 DPI PNG（特許サブグラフ） |
-| 出力 | `output/network_class_graph.png` | 300 DPI PNG（D-class 集約） |
-| 出力 | `output/network_degree_dist.png` | 300 DPI PNG（次数分布） |
-| 出力 | `output/network_summary.csv` | グラフ要約統計 |
+| 出力 | `output/fig1_network_topology.png` | 300 DPI PNG（Eq.9/10 ネットワーク構造） |
+| 出力 | `output/fig2_ergm_statistics.png` | 300 DPI PNG（Eq.1-8 ERGM 統計量） |
+| 出力 | `output/fig3_degree_distribution.png` | 300 DPI PNG（Eq.10/11 次数・betweenness） |
+| 出力 | `output/fig4_homophily_heatmap.png` | 300 DPI PNG（Eq.6 35×35 行列） |
+| 出力 | `output/fig5_sender_receiver.png` | 300 DPI PNG（Eq.4/5 per-class） |
+| 出力 | `output/fig6_gw_statistics.png` | 300 DPI PNG（GW 統計量） |
+| 出力 | `output/fig7_date_guard.png` | 300 DPI PNG（Eq.7/8 時間バイアス） |
+| 出力 | `output/ergm_statistics.csv` | 全統計量 CSV |
 
-**処理内容**: STEP 2d の出力から NetworkX グラフを構築し、論文品質 PNG を出力する。ノード色は D-class（35 色パレット）、ノードサイズは degree（log スケール）、エッジ太さはクラス間共引用本数（D-class 図）、次数分布は log-log + べき乗則フィット。STEP 3 の Gemini Yes ペアをオプションで橙色エッジとして重ね描きできる。STEP 2d の出力のみに依存し、独立して実行可能。
+**処理内容**: Chakraborty et al. (2020) の全方程式（Eq.1-11）および GW 統計量（GWIDegree・GWESP・GWDSP）を実装し、7 枚の論文品質 PNG を生成する。ノード色は D-class（35 色）、サイズは degree、エッジ太さはクラス間共引用本数。STEP 2d の出力のみに依存し、独立して実行可能。
 
 ```bash
 # デフォルト（degree 上位 250 件 + 1-hop）
