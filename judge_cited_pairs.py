@@ -21,6 +21,7 @@ from tqdm import tqdm
 
 from PIL import Image, ImageDraw, ImageFont
 
+import design_similarity
 from design_similarity import judge_similarity
 from image_processor import ImageProcessor
 
@@ -28,7 +29,9 @@ from image_processor import ImageProcessor
 # パス設定
 # ---------------------------------------------------------------------------
 JSONL_DIR = Path("/mnt/eightthdd/uspto/cited_image_pairs")
-OUT_DIR   = Path("/mnt/eightthdd/uspto/similarity_results")
+OUT_DIR   = Path("/mnt/eightthdd/uspto/") / (
+    "qwen_similarity_results" if design_similarity.BACKEND == "qwen" else "similarity_results"
+)
 DEBUG_DIR = Path(__file__).parent / "debug" / "image"
 
 DEBUG = True  # True にすると処理ペアを DEBUG_DIR に画像保存する
@@ -243,6 +246,8 @@ def process_year(
                                 tqdm.write(f"  [ERROR] 503が{MAX_RETRIES}回続いたため終了します。", file=sys.stderr)
                                 sys.exit(1)
                         else:
+                            import traceback
+                            tqdm.write(traceback.format_exc(), file=sys.stderr)
                             tqdm.write(f"  -> ERROR: {e}", file=sys.stderr)
                             sys.exit(1)
 

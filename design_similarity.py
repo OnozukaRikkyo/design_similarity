@@ -1,11 +1,12 @@
 """
 意匠類似判定クライアント
-Gemini 2.5 Flash-Lite (Google AI Studio 無料ティア) を使用
 
-制約:
-  - 15 RPM (requests per minute)
-  - 1,000,000 TPM (tokens per minute)
-  - 1,500 RPD (requests per day)
+バックエンド:
+  gemini … Gemini 2.5 Flash-Lite (Google AI Studio 無料ティア)
+  qwen   … Qwen-VL ローカル GPU 推論
+
+制約 (gemini):
+  - 15 RPM / 1,000,000 TPM / 1,500 RPD
 """
 
 import time
@@ -21,30 +22,31 @@ from collections import deque
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
-from google import genai
-from google.genai import types
 from PIL import Image
 
 from image_processor import ImageProcessor
 
 
-# ─── 定数 ───────────────────────────────────────────────────────────────────
+# ─── バックエンド選択（ここを編集して切り替える） ───────────────────────────
+# BACKEND = "gemini"           # "gemini" | "qwen"
+BACKEND = "qwen"           # "gemini" | "qwen"
 
-# MODEL = "gemini-2.5-flash-lite"
-# MODEL = "Gemini 2.5 FlasM"
-MODEL = "gemini-3.1-flash-lite-preview"
-# 
-# 無料ティア上限
-RPD_SESSION   = 0    # 本日すでに実行済みのリクエスト数（手動で更新）
-
-RPM_LIMIT = 15
-TPM_LIMIT = 250_000
-
-RPD_DAILY     = 500  # APIの1日の絶対上限（変更しない）
-RPD_REMAINING = RPD_DAILY - RPD_SESSION  # このセッションで実行できる残り数
+# ─── Gemini 設定 ─────────────────────────────────────────────────────────────
+MODEL         = "gemini-3.1-flash-lite-preview"
+RPD_SESSION   = 0       # 本日すでに実行済みのリクエスト数（手動で更新）
+RPM_LIMIT     = 15
+TPM_LIMIT     = 250_000
+RPD_DAILY     = 500     # API の1日の絶対上限（変更しない）
+RPD_REMAINING = RPD_DAILY - RPD_SESSION
 QUOTA_RESET_TIME = "17:01"  # クォータリセット時刻（HH:MM）
-THINKING_BUDGET = 8192  # 思考トークン上限（0 で無効化）
-MIN_INTERVAL_SEC = 1.0  # RPM制約：15RPM → 最低1秒/リクエスト
+THINKING_BUDGET  = 8192     # 思考トークン上限（0 で無効化）
+MIN_INTERVAL_SEC = 1.0      # RPM 制約：15RPM → 最低1秒/リクエスト
+
+# ─── Qwen 設定 ───────────────────────────────────────────────────────────────
+QWEN_MODEL_ID       = "Qwen/Qwen3-VL-4B-Instruct"  # "Qwen/Qwen2-VL-7B-Instruct" など
+QWEN_MAX_NEW_TOKENS = 512
+QWEN_MAX_IMAGE_SIZE = 1024   # ロングエッジ上限（px）
+
 DEBUG = False  # True のとき前処理済み画像を debug/image/ に保存する
 
 DEFAULT_PROMPT = """\
@@ -69,14 +71,14 @@ Required JSON schema (use exactly these keys):
 """
 
 
-# ─── レート制限 ──────────────────────────────────────────────────────────────
+# ─── レート制限（Gemini 専用） ───────────────────────────────────────────────
 
 class RateLimiter:
     """スライディングウィンドウ方式のレート制限器"""
 
     def __init__(self):
-        self._req_times: deque[float] = deque()              # 過去1分のリクエスト時刻
-        self._token_times: deque[tuple[float, int]] = deque() # 過去1分の (時刻, トークン数)
+        self._req_times: deque[float] = deque()
+        self._token_times: deque[tuple[float, int]] = deque()
         self._day_count: int = 0
         self._day_start: float = time.time()
 
@@ -101,7 +103,6 @@ class RateLimiter:
 
     @staticmethod
     def _next_reset_dt() -> datetime:
-        """次のQUOTA_RESET_TIMEのdatetimeを返す"""
         h, m = map(int, QUOTA_RESET_TIME.split(":"))
         now = datetime.now()
         reset = now.replace(hour=h, minute=m, second=0, microsecond=0)
@@ -110,7 +111,6 @@ class RateLimiter:
         return reset
 
     def wait_for_slot(self, n_images: int = 2) -> None:
-        """レート上限に達していれば必要な時間だけ待機する"""
         self._reset_day_if_needed()
 
         if self._day_count > RPD_REMAINING:
@@ -132,7 +132,6 @@ class RateLimiter:
             if req_ok and tpm_ok:
                 break
 
-            # 次にスロットが空く時刻を計算
             waits = []
             if not req_ok:
                 waits.append(60.0 - (now - self._req_times[0]))
@@ -156,10 +155,8 @@ _SUPPORTED_SUFFIXES = {".tif", ".tiff", ".jpg", ".jpeg", ".png", ".webp", ".gif"
 _DEBUG_IMAGE_DIR = Path(__file__).parent / "debug" / "image"
 
 
-def load_image_part(path: str) -> types.Part:
-    """画像ファイルを余白削除・縮小してから Gemini API の Part 形式に変換する"""
-    import io
-
+def _load_pil_image(path: str, max_size: int | None = None) -> Image.Image:
+    """前処理済み PIL Image を返す（余白削除・縮小）。"""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"画像ファイルが見つかりません: {path}")
@@ -169,23 +166,35 @@ def load_image_part(path: str) -> types.Part:
     with Image.open(p) as raw:
         img = ImageProcessor.process(raw.copy()).convert("RGB")
 
+    if max_size:
+        w, h = img.size
+        if max(w, h) > max_size:
+            scale = max_size / max(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
     if DEBUG:
         _DEBUG_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
         img.save(_DEBUG_IMAGE_DIR / (p.stem + ".png"))
 
+    return img
+
+
+def _load_gemini_part(path: str):
+    """画像を Gemini API の Part 形式に変換する。"""
+    import io
+    from google.genai import types
+
+    img = _load_pil_image(path)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png")
 
 
 def _get_image_size(path: str) -> tuple[int, int]:
-    """前処理後の画像の (幅, 高さ) を返す"""
     return ImageProcessor.process_file(path).size
 
 
-# ─── 判定関数 ────────────────────────────────────────────────────────────────
-
-_limiter = RateLimiter()
+# ─── エラーログ ──────────────────────────────────────────────────────────────
 
 _ERROR_LOG_DIR = Path(__file__).parent / "log" / "error"
 
@@ -203,23 +212,37 @@ def _write_error_log(image1: str, image2: str, exc: BaseException) -> Path:
     return log_file
 
 
-def judge_similarity(
+def _parse_json_result(raw: str, image1: str, image2: str) -> dict:
+    """raw テキストから JSON を抽出してパースする。失敗時は sys.exit。"""
+    try:
+        start = raw.index("{")
+        end = raw.rindex("}") + 1
+        result = json.loads(raw[start:end])
+    except (ValueError, json.JSONDecodeError):
+        log_dir = Path(__file__).parent / "log"
+        log_dir.mkdir(exist_ok=True)
+        log_path = log_dir / f"parse_error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        log_path.write_text(f"raw output:\n{raw}\n\n{traceback.format_exc()}", encoding="utf-8")
+        print(f"[ERROR] JSONパースに失敗しました。詳細: {log_path}", flush=True)
+        sys.exit(1)
+    result["raw"] = raw
+    return result
+
+
+# ─── Gemini バックエンド ─────────────────────────────────────────────────────
+
+_limiter = RateLimiter()
+
+
+def _judge_similarity_gemini(
     image_path_1: str,
     image_path_2: str,
-    prompt: str = DEFAULT_PROMPT,
+    prompt: str,
     api_key: str | None = None,
 ) -> dict:
-    """
-    2枚の画像の意匠類似性を Gemini で判定する。
+    from google import genai
+    from google.genai import types
 
-    Returns:
-        {
-            "similarity": "Yes" | "No",
-            "confidence": int (1–5),
-            "reason": str,
-            "raw": str   # モデルの生テキスト（デバッグ用）
-        }
-    """
     key = api_key or os.environ.get("GEMINI_API_KEY")
     if not key:
         raise EnvironmentError(
@@ -228,20 +251,17 @@ def judge_similarity(
         )
 
     client = genai.Client(api_key=key)
-
-    img1 = load_image_part(image_path_1)
-    img2 = load_image_part(image_path_2)
+    img1 = _load_gemini_part(image_path_1)
+    img2 = _load_gemini_part(image_path_2)
 
     w1, h1 = _get_image_size(image_path_1)
     w2, h2 = _get_image_size(image_path_2)
 
-    # レート制限チェック＆待機
     _limiter.wait_for_slot(n_images=2)
 
     contents = [img1, img2, types.Part.from_text(text=prompt)]
-
     print(
-        f"  [request] {Path(image_path_1).name}({w1}×{h1})"
+        f"  [gemini] {Path(image_path_1).name}({w1}×{h1})"
         f" × {Path(image_path_2).name}({w2}×{h2})",
         flush=True,
     )
@@ -256,7 +276,6 @@ def judge_similarity(
     )
     elapsed = time.time() - t_start
 
-    # トークン使用量
     usage = response.usage_metadata
     total_tokens = usage.total_token_count if usage else 0
     _limiter.record_request(n_images=2, total_tokens=total_tokens)
@@ -271,7 +290,6 @@ def judge_similarity(
             flush=True,
         )
 
-    # IPM上限対応: リクエスト開始から60秒未満なら残り時間だけ待機
     remaining = MIN_INTERVAL_SEC - elapsed
     if remaining > 0:
         print(f"  [wait] {remaining:.1f}秒 待機中...", flush=True)
@@ -279,37 +297,121 @@ def judge_similarity(
     else:
         time.sleep(2)
 
-    raw = response.text.strip()
+    return _parse_json_result(response.text.strip(), image_path_1, image_path_2)
 
-    # JSON 部分を抽出してパース
+
+# ─── Qwen バックエンド ───────────────────────────────────────────────────────
+
+def _tqdm_write(msg: str) -> None:
     try:
-        start = raw.index("{")
-        end = raw.rindex("}") + 1
-        result = json.loads(raw[start:end])
-    except (ValueError, json.JSONDecodeError):
-        log_dir = Path(__file__).parent / "log"
-        log_dir.mkdir(exist_ok=True)
-        log_path = log_dir / f"parse_error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        log_path.write_text(f"raw output:\n{raw}\n\n{traceback.format_exc()}", encoding="utf-8")
-        print(f"[ERROR] JSONパースに失敗しました。詳細: {log_path}", flush=True)
-        sys.exit(1)
+        from tqdm import tqdm as _tqdm
+        _tqdm.write(msg)
+    except ImportError:
+        print(msg, flush=True)
 
-    result["raw"] = raw
-    return result
+
+_qwen_model = None
+_qwen_processor = None
+
+
+def _get_qwen_model():
+    global _qwen_model, _qwen_processor
+    if _qwen_model is None:
+        import torch
+        from transformers import AutoModelForImageTextToText, AutoProcessor
+
+        _tqdm_write(f"  [qwen] Loading {QWEN_MODEL_ID} …")
+        _qwen_model = AutoModelForImageTextToText.from_pretrained(
+            QWEN_MODEL_ID,
+            torch_dtype=torch.bfloat16,
+            device_map="cuda",
+        )
+        _qwen_model.eval()
+        _qwen_processor = AutoProcessor.from_pretrained(QWEN_MODEL_ID)
+        vram_gb = torch.cuda.memory_allocated() / 1e9
+        _tqdm_write(f"  [qwen] Model loaded. VRAM used: {vram_gb:.1f} GB")
+    return _qwen_model, _qwen_processor
+
+
+def _judge_similarity_qwen(
+    image_path_1: str,
+    image_path_2: str,
+    prompt: str,
+) -> dict:
+    import torch
+    from qwen_vl_utils import process_vision_info
+
+    model, processor = _get_qwen_model()
+
+    img1 = _load_pil_image(image_path_1, max_size=QWEN_MAX_IMAGE_SIZE)
+    img2 = _load_pil_image(image_path_2, max_size=QWEN_MAX_IMAGE_SIZE)
+
+    w1, h1 = img1.size
+    w2, h2 = img2.size
+    _tqdm_write(
+        f"  [qwen] {Path(image_path_1).name}({w1}×{h1})"
+        f" × {Path(image_path_2).name}({w2}×{h2})"
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": img1},
+                {"type": "image", "image": img2},
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+
+    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    img_inputs, _ = process_vision_info(messages)
+    inputs = processor(
+        text=[text],
+        images=img_inputs if img_inputs else None,
+        return_tensors="pt",
+    ).to("cuda")
+
+    t_start = time.time()
+    with torch.no_grad():
+        generated_ids = model.generate(**inputs, max_new_tokens=QWEN_MAX_NEW_TOKENS)
+    elapsed = time.time() - t_start
+
+    trimmed = generated_ids[0][len(inputs.input_ids[0]):]
+    raw = processor.decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+    _tqdm_write(f"  [qwen] {elapsed:.1f}秒")
+
+    return _parse_json_result(raw.strip(), image_path_1, image_path_2)
+
+
+# ─── 統合判定関数 ────────────────────────────────────────────────────────────
+
+def judge_similarity(
+    image_path_1: str,
+    image_path_2: str,
+    prompt: str = DEFAULT_PROMPT,
+    api_key: str | None = None,
+) -> dict:
+    """
+    2枚の画像の意匠類似性を判定する。BACKEND により Gemini / Qwen を切り替える。
+
+    Returns:
+        {
+            "similarity": "Yes" | "No",
+            "confidence": int (1–5),
+            "reason": str,
+            "raw": str
+        }
+    """
+    if BACKEND == "qwen":
+        return _judge_similarity_qwen(image_path_1, image_path_2, prompt)
+    else:
+        return _judge_similarity_gemini(image_path_1, image_path_2, prompt, api_key)
 
 
 # ─── バッチ処理 ──────────────────────────────────────────────────────────────
 
 def batch_judge(pairs: list[tuple[str, str]], prompt: str = DEFAULT_PROMPT) -> list[dict]:
-    """
-    複数ペアを順次処理する。レート制限は judge_similarity 内で自動管理。
-
-    Args:
-        pairs: [(image1_path, image2_path), ...]
-
-    Returns:
-        判定結果のリスト
-    """
     results = []
     total = len(pairs)
     for i, (p1, p2) in enumerate(pairs, 1):
@@ -331,9 +433,7 @@ def batch_judge(pairs: list[tuple[str, str]], prompt: str = DEFAULT_PROMPT) -> l
 # ─── CLI ─────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="意匠類似判定 (Gemini 2.5 Flash Lite)"
-    )
+    parser = argparse.ArgumentParser(description="意匠類似判定")
     parser.add_argument("image1", help="画像1のパス")
     parser.add_argument("image2", help="画像2のパス")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT, help="カスタムプロンプト")

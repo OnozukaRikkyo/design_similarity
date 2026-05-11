@@ -1,136 +1,104 @@
 #!/usr/bin/env python3
 """
-USPTO Design Patent Co-citation Network Visualizer
-====================================================
-Full implementation of equations from:
-  Chakraborty, Byshkin & Crestani (2020)
-  "Patent citation network analysis: A perspective from
-   descriptive statistics and ERGMs"  PLoS ONE 15(12): e0241797.
-
-Equations implemented
-─────────────────────
-Eq.(1)  ERGM probability:   pi(x) = exp(sum theta_s g_s(x)) / Z
-Eq.(2)  Arc statistic:      g_L(x) = sum x_{i,j}
-Eq.(4)  Sender effect:      g_send(x) = sum_{i,j} a_i x_{i,j}
-Eq.(5)  Receiver effect:    g_rec(x)  = sum_{i,j} a_j x_{i,j}
-Eq.(6)  Homophily:          g_homo(x) = sum_{i,j} delta(a_i,a_j) x_{i,j}
-Eq.(7)  Date guard:         g_date(x) = sum_{i,j} H(d_j - d_i) x_{i,j}
-Eq.(9)  Transitivity T:     3 x triangles / connected-triples
-Eq.(10) Density D:          |E| / (|V|(|V|-1))
-Eq.(11) Betweenness g(v):   sum_{s!=v!=t} sigma_st(v) / sigma_st
-
-Network statistics (Snijders et al.)
-  GWIDegree  (AltInStar)
-  GWODegree  (AltOutStar)
-  GWESP      (AltKTriangleT)
-  GWDSP      (AltTwoPathsTD)
-
-Outputs
-───────
-  output/fig1_network_topology.png      Eq.(9)(10) -- structural overview
-  output/fig2_ergm_statistics.png       Eq.(1-8)   -- ERGM sufficient statistics
-  output/fig3_degree_distribution.png   Eq.(10)(11) -- degree + betweenness
-  output/fig4_homophily_heatmap.png     Eq.(6) -- delta(a_i,a_j) matrix (35x35)
-  output/fig5_sender_receiver.png       Eq.(4)(5) -- per-class send/recv
-  output/fig6_gw_statistics.png         GWIDeg / GWODeg / GWESP / GWDSP
-  output/fig7_date_guard.png            Eq.(7)(8) -- temporal citation bias
-  output/ergm_statistics.csv           all computed statistics
-
-Usage
-─────
-  python visualize_ergm_network.py
-  python visualize_ergm_network.py --ergm-dir ./ergm_input --out-dir ./output
-  python visualize_ergm_network.py --top-n 500 --bc-k 1000
-  python visualize_ergm_network.py --no-fig6   # skip slow GW stats
+USPTO Design Patent Co-citation Network Visualizer  v4
+=======================================================
+* All figures are exported as single panels (1 plot per file).
+* Tables are exported as LaTeX (.tex) files.
+* Figure 1 uses Kamada-Kawai layout and hollow nodes.
+* Figure 8 shows ERGM coefficients read from a CSV (or watermarked dummy).
+* --estimate-ergm runs Robbins-Monro MCMLE and writes ergm_results.csv.
 """
 
 import argparse
 import math
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.gridspec as gridspec
-import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
-import networkx as nx
+import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
+import networkx as nx
 
-# ---------------------------------------------------------------------------
-# Publication-quality style
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
+# Global constants
+# ─────────────────────────────────────────────────────────────────────
+FIG_SIZE = (7, 6)
+FIG_DPI  = 300
+
+ALL_CLASSES = [f"D{i}" for i in range(1, 35)] + ["D99"]
+CLASS_NAMES = {
+    "D1":  "Edible Prods.",    "D2":  "Apparel",         "D3":  "Travel Goods",
+    "D4":  "Brushware",        "D5":  "Textile",          "D6":  "Furnishings",
+    "D7":  "Food Equip.",      "D8":  "Tools/Hardware",   "D9":  "Tools (misc)",
+    "D10": "Measuring Dev.",   "D11": "Jewelry",          "D12": "Transportation",
+    "D13": "Prod. Equip.",     "D14": "Rec./Comm./Info.", "D15": "Machines",
+    "D16": "Photography",      "D17": "Musical Instr.",   "D18": "Printing/Office",
+    "D19": "Office Suppl.",    "D20": "Sales/Advert.",    "D21": "Amusement Dev.",
+    "D22": "Arms/Pyro.",       "D23": "Heating/Cooling",  "D24": "Medical/Lab",
+    "D25": "Building/Constr.", "D26": "Lighting",         "D27": "Tobacco",
+    "D28": "Pharma/Cosmet.",   "D29": "Animal Husb.",     "D30": "Outdoor/Garden",
+    "D31": "Articles Mfg.",    "D32": "Washing/Clean.",   "D33": "Food/Bev Svc.",
+    "D34": "Material Hdl.",    "D99": "Misc.",
+}
+
 PLT_STYLE = {
     "figure.facecolor":   "white",
     "axes.facecolor":     "white",
     "axes.edgecolor":     "#222222",
-    "axes.linewidth":     0.8,
+    "axes.linewidth":     0.9,
     "axes.grid":          True,
     "grid.color":         "#DDDDDD",
     "grid.linewidth":     0.5,
-    "font.family":        "sans-serif",
-    "font.size":          9,
-    "axes.labelsize":     9,
-    "axes.titlesize":     10,
-    "xtick.labelsize":    8,
-    "ytick.labelsize":    8,
-    "legend.fontsize":    8,
-    "legend.framealpha":  0.9,
-    "lines.linewidth":    1.2,
-    "savefig.dpi":        300,
+    "grid.alpha":         0.7,
+    "font.family":        "DejaVu Sans",
+    "font.size":          10,
+    "axes.labelsize":     10,
+    "axes.titlesize":     11,
+    "xtick.labelsize":    9,
+    "ytick.labelsize":    9,
+    "legend.fontsize":    9,
+    "legend.framealpha":  0.88,
+    "lines.linewidth":    1.4,
+    "savefig.dpi":        FIG_DPI,
     "savefig.bbox":       "tight",
-    "savefig.pad_inches": 0.05,
+    "savefig.pad_inches": 0.08,
 }
 matplotlib.rcParams.update(PLT_STYLE)
 
-# ---------------------------------------------------------------------------
-# D-class constants
-# ---------------------------------------------------------------------------
-ALL_CLASSES = [f"D{i}" for i in range(1, 35)] + ["D99"]
-
-CLASS_NAMES = {
-    "D1":  "Edible Prods.",     "D2":  "Apparel",
-    "D3":  "Travel Goods",      "D4":  "Brushware",
-    "D5":  "Textile",           "D6":  "Furnishings",
-    "D7":  "Food Equip.",       "D8":  "Tools/Hardware",
-    "D9":  "Tools (misc)",      "D10": "Measuring Dev.",
-    "D11": "Jewelry",           "D12": "Transportation",
-    "D13": "Prod. Equip.",      "D14": "Rec./Comm./Info.",
-    "D15": "Machines",          "D16": "Photography",
-    "D17": "Musical Instr.",    "D18": "Printing/Office",
-    "D19": "Office Suppl.",     "D20": "Sales/Advert.",
-    "D21": "Amusement Dev.",    "D22": "Arms/Pyro.",
-    "D23": "Heating/Cooling",   "D24": "Medical/Lab",
-    "D25": "Building/Constr.",  "D26": "Lighting",
-    "D27": "Tobacco",           "D28": "Pharma/Cosmet.",
-    "D29": "Animal Husb.",      "D30": "Outdoor/Garden",
-    "D31": "Articles Mfg.",     "D32": "Washing/Clean.",
-    "D33": "Food/Bev Svc.",     "D34": "Material Hdl.",
-    "D99": "Misc.",
-}
-
-# 35 distinct qualitative colors: tab20 (20) + tab20b[:15]
-_c20a = list(plt.cm.tab20.colors)
-_c20b = list(plt.cm.tab20b.colors)
-_PALETTE = _c20a + _c20b[:15]
+CMAP_CLASS = matplotlib.colormaps.get_cmap("tab20").resampled(35)
 
 
-def cls_color(c: str) -> tuple:
+def cls_color(c: str):
     idx = ALL_CLASSES.index(c) if c in ALL_CLASSES else 34
-    return _PALETTE[idx]
+    return CMAP_CLASS(idx / 34)
 
 
-# ---------------------------------------------------------------------------
+def infobox(ax, lines: list, loc: str = "upper right",
+            fc: str = "#F7F9FF", ec: str = "#AABBD0"):
+    text = "\n".join(lines)
+    locs = {
+        "upper right": (0.97, 0.97, "right",  "top"),
+        "upper left":  (0.03, 0.97, "left",   "top"),
+        "lower right": (0.97, 0.03, "right",  "bottom"),
+        "lower left":  (0.03, 0.03, "left",   "bottom"),
+    }
+    x, y, ha, va = locs.get(loc, locs["upper right"])
+    ax.text(x, y, text, transform=ax.transAxes,
+            ha=ha, va=va, fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.45", fc=fc, ec=ec, alpha=0.93))
+
+# ─────────────────────────────────────────────────────────────────────
 # I/O helpers
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 def load_attrs(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, sep="\t", low_memory=False)
 
-
-def load_arc_list(path: Path) -> list[tuple[int, int]]:
+def load_arc_list(path: Path) -> list:
     arcs = []
     with open(path) as f:
         for line in f:
@@ -139,28 +107,25 @@ def load_arc_list(path: Path) -> list[tuple[int, int]]:
                 arcs.append((int(p[0]), int(p[1])))
     return arcs
 
-
-def arcs_to_undirected(arcs: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    seen: set[tuple[int, int]] = set()
+def arcs_to_undirected(arcs: list) -> list:
+    s = set()
     for u, v in arcs:
         if u != v:
-            seen.add((min(u, v), max(u, v)))
-    return list(seen)
+            s.add((min(u, v), max(u, v)))
+    return list(s)
 
-
-def build_networkx(n_nodes: int, edges: list[tuple[int, int]]) -> nx.Graph:
+def build_graph(n_nodes: int, edges: list) -> nx.Graph:
     G = nx.Graph()
     G.add_nodes_from(range(n_nodes))
     G.add_edges_from(edges)
     return G
 
-
 def attach_attrs(G: nx.Graph, attrs: pd.DataFrame) -> None:
     for i in G.nodes():
         if i >= len(attrs):
             G.nodes[i]["primary_class"] = "Unknown"
-            G.nodes[i]["n_classes"]     = 0
-            G.nodes[i]["date"]          = ""
+            G.nodes[i]["n_classes"] = 0
+            G.nodes[i]["date"] = ""
         else:
             row = attrs.iloc[i]
             G.nodes[i]["primary_class"] = str(row.get("primary_class", "Unknown"))
@@ -168,46 +133,24 @@ def attach_attrs(G: nx.Graph, attrs: pd.DataFrame) -> None:
             G.nodes[i]["n_classes"] = int(nc) if pd.notna(nc) else 0
             G.nodes[i]["date"] = str(row.get("date", ""))
 
+# ─────────────────────────────────────────────────────────────────────
+# Network statistics
+# ─────────────────────────────────────────────────────────────────────
+def eq2_arc_stat(arcs): return len(arcs)
 
-# ---------------------------------------------------------------------------
-# Eq.(2)  Arc statistic
-# ---------------------------------------------------------------------------
-def eq2_arc_stat(arcs: list) -> int:
-    """g_L(x) = sum x_{i,j}"""
-    return len(arcs)
-
-
-# ---------------------------------------------------------------------------
-# Eq.(4)  Sender effect per class
-# ---------------------------------------------------------------------------
-def eq4_sender_effect(arcs: list, node_class: dict) -> dict:
-    """g_send(x; a) = sum_{i,j} a_i x_{i,j}  [directed arcs]"""
-    cnt: dict[str, int] = defaultdict(int)
-    for i, _j in arcs:
+def eq4_sender_effect(arcs, node_class):
+    cnt = defaultdict(int)
+    for i, j in arcs:
         cnt[node_class.get(i, "Unknown")] += 1
-    return dict(cnt)
+    return cnt
 
-
-# ---------------------------------------------------------------------------
-# Eq.(5)  Receiver effect per class
-# ---------------------------------------------------------------------------
-def eq5_receiver_effect(arcs: list, node_class: dict) -> dict:
-    """g_rec(x; a) = sum_{i,j} a_j x_{i,j}"""
-    cnt: dict[str, int] = defaultdict(int)
-    for _i, j in arcs:
+def eq5_receiver_effect(arcs, node_class):
+    cnt = defaultdict(int)
+    for i, j in arcs:
         cnt[node_class.get(j, "Unknown")] += 1
-    return dict(cnt)
+    return cnt
 
-
-# ---------------------------------------------------------------------------
-# Eq.(6)  Homophily matrix
-# ---------------------------------------------------------------------------
-def eq6_homophily(
-    edges: list,
-    node_class: dict,
-    cls_list: list[str],
-) -> np.ndarray:
-    """g_homo(x) = sum delta(a_i, a_j) x_{i,j}  ->  35x35 matrix"""
+def eq6_homophily(edges, node_class, cls_list):
     idx = {c: k for k, c in enumerate(cls_list)}
     mat = np.zeros((len(cls_list), len(cls_list)), dtype=np.int64)
     for u, v in edges:
@@ -219,235 +162,320 @@ def eq6_homophily(
                 mat[idx[cv], idx[cu]] += 1
     return mat
 
-
-# ---------------------------------------------------------------------------
-# Eq.(7)/(8)  Date guard
-# ---------------------------------------------------------------------------
-def eq7_date_guard(arcs: list, node_date: dict) -> int:
-    """
-    g_date(x) = sum H(d_j - d_i) x_{i,j}
-    H(y) = 0 if y <= 0, else 1  (Eq. 8)
-    Returns count of "forward arcs" (arc i->j where j is newer than i).
-    """
+def eq7_date_guard(arcs, node_date):
     violations = 0
     for i, j in arcs:
         di = node_date.get(i)
         dj = node_date.get(j)
-        if di is not None and dj is not None and (dj - di).days > 0:
-            violations += 1
+        if di is not None and dj is not None:
+            if (dj - di).days > 0:
+                violations += 1
     return violations
 
+def eq9_transitivity(G): return nx.transitivity(G)
 
-# ---------------------------------------------------------------------------
-# Eq.(9)  Transitivity
-# ---------------------------------------------------------------------------
-def eq9_transitivity(G: nx.Graph) -> float:
-    """T = 3 x triangles / connected-triples"""
-    return nx.transitivity(G)
-
-
-# ---------------------------------------------------------------------------
-# Eq.(10) Density
-# ---------------------------------------------------------------------------
-def eq10_density(G: nx.Graph) -> float:
-    """D = |E| / (|V|(|V|-1))"""
-    N = G.number_of_nodes()
-    M = G.number_of_edges()
+def eq10_density(G):
+    N, M = G.number_of_nodes(), G.number_of_edges()
     return M / (N * (N - 1)) if N >= 2 else 0.0
 
-
-# ---------------------------------------------------------------------------
-# Eq.(11) Betweenness centrality
-# ---------------------------------------------------------------------------
-def eq11_betweenness(G: nx.Graph, k: int = 500) -> dict:
-    """g(v) = sum_{s!=v!=t} sigma_st(v) / sigma_st"""
+def eq11_betweenness(G, k=500):
     N = G.number_of_nodes()
     if N <= k:
         return nx.betweenness_centrality(G, normalized=True)
     return nx.betweenness_centrality(G, k=k, normalized=True, seed=42)
 
+def gw_idegree(G, alpha=1.0):
+    return float(np.sum(np.exp(-alpha * np.array([d for _, d in G.degree()]))))
 
-# ---------------------------------------------------------------------------
-# GW statistics (Snijders et al.)
-# ---------------------------------------------------------------------------
-def gw_idegree(G: nx.Graph, alpha: float = 1.0) -> float:
-    """GWIDegree (AltInStar): geometrically-weighted degree sum."""
-    degs = np.array([d for _, d in G.degree()], dtype=float)
-    return float(np.sum(np.exp(-alpha * degs)))
+def gw_odegree(G, alpha=1.0): return gw_idegree(G, alpha)
 
-
-def gw_odegree(G: nx.Graph, alpha: float = 1.0) -> float:
-    """GWODegree (AltOutStar): same as GWIDegree for undirected graphs."""
-    return gw_idegree(G, alpha)
-
-
-def gw_esp(G: nx.Graph, alpha: float = 2.0) -> float:
-    """GWESP (AltKTriangleT): geometrically-weighted edgewise shared partners."""
-    esp_counts: dict[int, int] = defaultdict(int)
+def gw_esp(G, alpha=2.0):
+    esp_counts = defaultdict(int)
     for u, v in G.edges():
         shared = len(set(G.neighbors(u)) & set(G.neighbors(v)))
         esp_counts[shared] += 1
-    return float(sum(cnt * math.exp(-alpha * k) for k, cnt in esp_counts.items()))
+    return sum(cnt * math.exp(-alpha * k) for k, cnt in esp_counts.items())
 
-
-def gw_dsp(G: nx.Graph, alpha: float = 2.0) -> float:
-    """GWDSP (AltTwoPathsTD): geometrically-weighted dyadwise shared partners
-    (approximation over non-edge pairs sharing at least one common neighbor)."""
-    dsp_counts: dict[tuple, int] = defaultdict(int)
+def gw_dsp(G, alpha=2.0):
+    dsp_raw = defaultdict(int)
     for v in G.nodes():
         nbrs = list(G.neighbors(v))
         for i in range(len(nbrs)):
             for j in range(i + 1, len(nbrs)):
                 u, w = nbrs[i], nbrs[j]
                 if not G.has_edge(u, w):
-                    dsp_counts[(min(u, w), max(u, w))] += 1
-    counts: dict[int, int] = defaultdict(int)
-    for cnt in dsp_counts.values():
+                    dsp_raw[(min(u, w), max(u, w))] += 1
+    counts = defaultdict(int)
+    for cnt in dsp_raw.values():
         counts[cnt] += 1
-    return float(sum(c * math.exp(-alpha * k) for k, c in counts.items()))
+    return sum(c * math.exp(-alpha * k) for k, c in counts.items())
 
+def degree_arrays(G):
+    return np.array([d for _, d in G.degree()])
 
-# ---------------------------------------------------------------------------
-# Degree distribution helpers
-# ---------------------------------------------------------------------------
-def degree_arrays(G: nx.Graph) -> np.ndarray:
-    return np.array([d for _, d in G.degree()], dtype=float)
-
-
-def ccdf(degs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def ccdf(degs):
     vals = np.sort(np.unique(degs))
     n = len(degs)
     prob = np.array([np.sum(degs >= v) / n for v in vals])
     return vals, prob
 
+def powerlaw_fit(x, y):
+    mask = y > 0
+    lx, ly = np.log10(x[mask]), np.log10(y[mask])
+    if len(lx) < 5:
+        return None, None
+    m, b = np.polyfit(lx, ly, 1)
+    return m, b
 
-# ---------------------------------------------------------------------------
-# Subgraph for visualization
-# ---------------------------------------------------------------------------
-def focus_subgraph(G: nx.Graph, top_n: int = 300) -> nx.Graph:
+def focus_subgraph(G, top_n=300):
     deg = dict(G.degree())
-    top  = sorted(deg, key=deg.get, reverse=True)[:top_n]
-    nbrs: set[int] = set()
+    top = set(sorted(deg, key=deg.get, reverse=True)[:top_n])
+    nbrs = set()
     for n in top:
         nbrs.update(G.neighbors(n))
-    return G.subgraph(sorted(set(top) | nbrs)).copy()
+    return G.subgraph(sorted(top | nbrs)).copy()
+
+# ─────────────────────────────────────────────────────────────────────
+# MCMC ERGM estimation (Robbins-Monro MCMLE)
+# ─────────────────────────────────────────────────────────────────────
+
+def _rand_pair(rng: np.random.Generator, n: int):
+    """Sample a uniformly random unordered pair (i, j) with i != j."""
+    i = int(rng.integers(n))
+    j = int(rng.integers(n - 1))
+    if j >= i:
+        j += 1
+    return i, j
 
 
-# ---------------------------------------------------------------------------
-# Figure 1 -- Network topology overview  (Eq.9, Eq.10)
-# ---------------------------------------------------------------------------
-def fig1_network_topology(
+class _ERGMState:
+    """
+    Tracks sufficient statistics incrementally during Metropolis-Hastings
+    so each step costs O(degree) instead of O(N^2).
+
+    Statistics tracked (matching Chakraborty et al. 2020):
+      [0] Arc count              (Eq.2)
+      [1] Triangle count         (Eq.9 proxy / AltKTriT)
+      [2] GWIDegree  alpha=log2  (AltInStars)
+      [3] Same-class homophily   (Eq.6)
+    """
+    __slots__ = ("G", "nc", "alpha", "edges", "triangles", "gwideg", "homo")
+
+    def __init__(self, G: nx.Graph, nc: dict, alpha: float):
+        self.G         = G.copy()
+        self.nc        = nc
+        self.alpha     = alpha
+        self.edges     = float(G.number_of_edges())
+        self.triangles = float(sum(nx.triangles(G).values())) / 3.0
+        degs           = np.fromiter((d for _, d in G.degree()), dtype=float,
+                                     count=G.number_of_nodes())
+        self.gwideg    = float(np.sum(np.exp(-alpha * degs)))
+        self.homo      = float(sum(1 for u, v in G.edges()
+                                   if nc.get(u, "") and nc.get(u, "") == nc.get(v, "")))
+
+    @property
+    def stats(self) -> np.ndarray:
+        return np.array([self.edges, self.triangles, self.gwideg, self.homo])
+
+    def try_toggle(self, u, v, theta: np.ndarray, rng: np.random.Generator) -> bool:
+        """Propose toggling edge (u,v); accept with Metropolis probability."""
+        adding = not self.G.has_edge(u, v)
+        sign   = 1.0 if adding else -1.0
+        nu, nv = set(self.G.neighbors(u)), set(self.G.neighbors(v))
+        shared = float(len(nu & nv))
+        du, dv = self.G.degree(u), self.G.degree(v)
+        dg     = 1 if adding else -1
+        d_gwideg = (math.exp(-self.alpha * (du + dg)) - math.exp(-self.alpha * du) +
+                    math.exp(-self.alpha * (dv + dg)) - math.exp(-self.alpha * dv))
+        cu, cv   = self.nc.get(u, ""), self.nc.get(v, "")
+        d_homo   = sign * float(bool(cu) and cu == cv)
+        delta    = np.array([sign, sign * shared, d_gwideg, d_homo])
+        log_acc  = float(theta @ delta)
+        if log_acc >= 0.0 or rng.random() < math.exp(log_acc):
+            self.edges     += sign
+            self.triangles += sign * shared
+            self.gwideg    += d_gwideg
+            self.homo      += d_homo
+            if adding:
+                self.G.add_edge(u, v)
+            else:
+                self.G.remove_edge(u, v)
+            return True
+        return False
+
+
+def estimate_ergm_mcmc(
     G: nx.Graph,
-    out_path: Path,
-    top_n: int = 300,
-) -> None:
+    node_class_dict: dict,
+    subgraph_size: int = 500,
+    n_outer: int = 40,
+    n_mcmc: int = 300,
+    burnin: int = 150,
+    alpha: float = math.log(2),
+    seed: int = 42,
+) -> pd.DataFrame:
     """
-    Network visualization with node color = primary class,
-    node size proportional to degree, annotated with Eq.(9) and Eq.(10).
+    Robbins-Monro MCMLE for a four-statistic ERGM on the largest-component
+    induced subgraph of the top-degree nodes.
+
+    Returns a DataFrame with columns:
+        group, label, estimate, std_error
+    suitable for feeding directly to fig8_ergm_coefficients().
     """
-    SG  = focus_subgraph(G, top_n)
-    pos = nx.spring_layout(SG, seed=42, weight=None,
-                           k=0.35, iterations=max(30, min(80, 8000 // max(SG.number_of_nodes(), 1))))
+    rng = np.random.default_rng(seed)
+    t0  = time.time()
+
+    # Build tractable subgraph: top-degree nodes, largest component
+    top_nodes = [n for n, _ in sorted(G.degree(), key=lambda x: x[1], reverse=True)
+                 ][:subgraph_size]
+    SG = G.subgraph(top_nodes).copy()
+    SG.remove_nodes_from(list(nx.isolates(SG)))
+    cc = max(nx.connected_components(SG), key=len)
+    SG = SG.subgraph(cc).copy()
+    nodes = list(SG.nodes())
+    N     = len(nodes)
+    nc    = {n: node_class_dict.get(n, "") for n in nodes}
+
+    print(f"  ERGM subgraph: |V|={N}, |E|={SG.number_of_edges()}")
+
+    g_obs   = _ERGMState(SG, nc, alpha).stats
+    density = SG.number_of_edges() / max(N * (N - 1) / 2, 1)
+    # Initialise theta from observed density (logit for arc term, 0 elsewhere)
+    theta   = np.array([math.log(max(density, 1e-9) / max(1.0 - density, 1e-9)),
+                        0.0, 0.0, 0.0])
+
+    print(f"  Starting Robbins-Monro ({n_outer} outer iterations)...")
+    for outer in range(n_outer):
+        step  = 0.18 / (outer + 1) ** 0.6
+        state = _ERGMState(SG, nc, alpha)
+        # Burn-in
+        for _ in range(burnin):
+            i, j = _rand_pair(rng, N)
+            state.try_toggle(nodes[i], nodes[j], theta, rng)
+        # Collect samples to estimate E_theta[g]
+        samples = np.empty((n_mcmc, 4))
+        for k in range(n_mcmc):
+            i, j = _rand_pair(rng, N)
+            state.try_toggle(nodes[i], nodes[j], theta, rng)
+            samples[k] = state.stats
+        g_mean = samples.mean(axis=0)
+        theta  = theta + step * (g_obs - g_mean)
+        elapsed = time.time() - t0
+        print(f"    iter {outer+1:2d}/{n_outer}  theta={np.round(theta,3)}  "
+              f"g_mean~g_obs diff={np.round(g_obs-g_mean,1)}  t={elapsed:.1f}s")
+
+    # Estimate standard errors via Fisher information = Cov_theta[g(X)]
+    print("  Estimating standard errors via Fisher information...")
+    state_f = _ERGMState(SG, nc, alpha)
+    n_se    = n_mcmc * 6
+    for _ in range(burnin * 3):
+        i, j = _rand_pair(rng, N)
+        state_f.try_toggle(nodes[i], nodes[j], theta, rng)
+    fin = np.empty((n_se, 4))
+    for k in range(n_se):
+        i, j = _rand_pair(rng, N)
+        state_f.try_toggle(nodes[i], nodes[j], theta, rng)
+        fin[k] = state_f.stats
+    cov_g = np.cov(fin.T) + 1e-6 * np.eye(4)
+    try:
+        se = np.sqrt(np.abs(np.diag(np.linalg.inv(cov_g))))
+    except np.linalg.LinAlgError:
+        se = np.full(4, float("nan"))
+
+    total = time.time() - t0
+    print(f"  ERGM estimation done in {total:.1f}s")
+    print(f"  theta = {np.round(theta, 4)}")
+    print(f"  se    = {np.round(se, 4)}")
+
+    return pd.DataFrame([
+        {"group": "Network Structures",
+         "label": "Arc Count (Eq.2 analog)",
+         "estimate": float(theta[0]), "std_error": float(se[0])},
+        {"group": "Network Structures",
+         "label": "Triangles / Transitivity (AltKTriT proxy)",
+         "estimate": float(theta[1]), "std_error": float(se[1])},
+        {"group": "Network Structures",
+         "label": "GWIDegree alpha=log(2) (AltInStars)",
+         "estimate": float(theta[2]), "std_error": float(se[2])},
+        {"group": "Homophily (D-Class)",
+         "label": "Same Primary D-Class (Eq.6)",
+         "estimate": float(theta[3]), "std_error": float(se[3])},
+    ])
+
+# ─────────────────────────────────────────────────────────────────────
+# Fig 1 — Network topology (Physics Insight, Kamada-Kawai)
+# ─────────────────────────────────────────────────────────────────────
+def fig1_network_topology(G: nx.Graph, out_path: Path, top_n: int = 300) -> None:
+    deg_dict   = dict(G.degree())
+    core_nodes = sorted(deg_dict, key=deg_dict.get, reverse=True)[:top_n]
+    SG = G.subgraph(core_nodes).copy()
+
+    SG.remove_nodes_from(list(nx.isolates(SG)))
+
+    if len(SG) > 0:
+        largest_cc = max(nx.connected_components(SG), key=len)
+        SG = SG.subgraph(largest_cc).copy()
+
+    print("    Calculating Kamada-Kawai layout...")
+    pos = nx.kamada_kawai_layout(SG)
+
     T = eq9_transitivity(SG)
     D = eq10_density(SG)
     N = SG.number_of_nodes()
     M = SG.number_of_edges()
 
-    fig, ax = plt.subplots(figsize=(9, 8))
+    fig, ax = plt.subplots(figsize=(10, 8))
     ax.set_aspect("equal")
     ax.axis("off")
 
-    # Edges
     edge_x, edge_y = [], []
     for u, v in SG.edges():
         x0, y0 = pos[u]; x1, y1 = pos[v]
-        edge_x += [x0, x1, None]
-        edge_y += [y0, y1, None]
-    ax.plot(edge_x, edge_y, lw=0.25, color="#BBBBBB", zorder=1, solid_capstyle="round")
+        edge_x += [x0, x1, None]; edge_y += [y0, y1, None]
+    ax.plot(edge_x, edge_y, lw=0.8, color="black", alpha=0.5, zorder=1)
 
-    # Nodes -- per class for legend
-    deg = dict(SG.degree())
-    max_d = max(deg.values()) if deg else 1
-    patch_handles = []
-    present = {SG.nodes[n].get("primary_class", "Unknown") for n in SG.nodes()}
-    for cls in ALL_CLASSES:
-        if cls not in present:
-            continue
-        xs, ys, sizes = [], [], []
-        for n in SG.nodes():
-            if SG.nodes[n].get("primary_class", "Unknown") != cls:
-                continue
-            x, y = pos[n]
-            xs.append(x); ys.append(y)
-            sizes.append(20 + 120 * (deg.get(n, 0) / max_d) ** 0.6)
-        ax.scatter(xs, ys, s=sizes, color=cls_color(cls),
-                   edgecolors="white", linewidths=0.3, zorder=2, alpha=0.88)
-        patch_handles.append(
-            mpatches.Patch(color=cls_color(cls),
-                           label=f"{cls}  {CLASS_NAMES.get(cls, '')}")
-        )
+    deg    = dict(SG.degree())
+    max_d  = max(deg.values()) if deg else 1
 
-    # Node size scale legend
+    xs_all, ys_all, sizes_all = [], [], []
+    for n in SG.nodes():
+        xs_all.append(pos[n][0])
+        ys_all.append(pos[n][1])
+        sizes_all.append(30 + 300 * (deg[n] / max_d))
+    ax.scatter(xs_all, ys_all, s=sizes_all, facecolors="none", edgecolors="black",
+               linewidths=1.5, zorder=2, alpha=0.85)
+
     ref_degs = sorted({1, max(2, max_d // 4), max(4, max_d // 2), max_d})
-    size_handles = [
-        plt.scatter([], [],
-                    s=20 + 120 * (v / max_d) ** 0.6,
-                    color="#555555", edgecolors="white", linewidths=0.3,
-                    label=f"$k$ = {v:,}")
-        for v in ref_degs
-    ]
+    size_handles = [plt.scatter([], [], s=30 + 300*(v/max_d),
+                                facecolors="none", edgecolors="black", linewidths=1.5,
+                                label=f"k = {v}") for v in ref_degs]
+    ax.legend(handles=size_handles, loc="lower right",
+              fontsize=9, title="Degree (node size)", frameon=False, scatterpoints=1)
 
-    leg1 = ax.legend(handles=patch_handles, loc="lower left",
-                     fontsize=6.5, ncol=3, framealpha=0.88,
-                     title="Primary D-class", title_fontsize=7,
-                     bbox_to_anchor=(0, 0), borderpad=0.5,
-                     markerscale=0.75)
-    ax.add_artist(leg1)
+    infobox(ax, [
+        "Giant Component Topology",
+        f"  Transitivity (Eq.9) T = {T:.4f}",
+        f"  Density      (Eq.10) D = {D:.3e}",
+        f"  |V| = {N:,}   |E| = {M:,}",
+        f"  Max degree  = {max_d:,}",
+    ], loc="upper left")
 
-    leg2 = ax.legend(handles=size_handles, loc="lower right",
-                     fontsize=7, title="Node size (degree)", title_fontsize=7.5,
-                     framealpha=0.88, scatterpoints=1, borderpad=0.6)
-    ax.add_artist(leg2)
-
-    # Metric annotation box
-    eq_text = (
-        r"$\mathbf{Network\ Metrics\ (Eqs.\ 9\text{-}10)}$" + "\n"
-        r"$T = \frac{3\times\#\mathrm{triangles}}{\#\mathrm{conn.\ triples}}$"
-        + f" $= {T:.4f}$\n"
-        r"$D = \frac{|E|}{|V|(|V|-1)}$"
-        + f" $= {D:.2e}$\n"
-        f"$|V|$ = {N:,},  $|E|$ = {M:,}"
-    )
-    ax.text(0.98, 0.98, eq_text, transform=ax.transAxes,
-            va="top", ha="right", fontsize=8.5,
-            bbox=dict(boxstyle="round,pad=0.5", fc="white", ec="#AAAAAA", alpha=0.93))
-
-    fig.suptitle(
-        "USPTO Design Patent Co-citation Network\n"
-        r"Node color: primary D-class  $|$  Node size $\propto$ degree  $|$  "
-        f"Focus subgraph: top-{top_n} nodes + 1-hop neighbors",
-        fontsize=9, y=1.0)
+    ax.set_title("USPTO Design Patent Co-citation Core Topology\n"
+                 "(Kamada-Kawai layout, hollow nodes scaled by degree)",
+                 fontsize=12, fontweight="bold")
     fig.tight_layout()
     fig.savefig(out_path)
     plt.close(fig)
     print(f"  [Fig1] -> {out_path}")
 
+# ─────────────────────────────────────────────────────────────────────
+# Fig 2 — ERGM sufficient statistics (Split & LaTeX)
+# ─────────────────────────────────────────────────────────────────────
+def fig2_ergm_statistics(G: nx.Graph, arcs, edges, attrs: pd.DataFrame, out_dir: Path) -> None:
+    node_class  = {i: G.nodes[i].get("primary_class", "Unknown") for i in G.nodes()}
+    cls_present = [c for c in ALL_CLASSES if c in set(node_class.values())]
 
-# ---------------------------------------------------------------------------
-# Figure 2 -- ERGM sufficient statistics  (Eq.1-8)
-# ---------------------------------------------------------------------------
-def fig2_ergm_statistics(
-    G: nx.Graph,
-    arcs: list,
-    edges: list,
-    attrs: pd.DataFrame,
-    out_path: Path,
-) -> None:
-    """Six-panel figure showing all ERGM statistics from Chakraborty et al. Eqs. 1-8."""
-    node_class = {i: G.nodes[i].get("primary_class", "Unknown") for i in G.nodes()}
-
-    # Parse dates for Eq.(7)
-    node_date: dict = {}
+    node_date = {}
     if "date" in attrs.columns:
         for i, row in attrs.iterrows():
             try:
@@ -455,247 +483,152 @@ def fig2_ergm_statistics(
             except Exception:
                 pass
 
-    g_L   = eq2_arc_stat(arcs)
-    g_s   = eq4_sender_effect(arcs, node_class)
-    g_r   = eq5_receiver_effect(arcs, node_class)
-    T     = eq9_transitivity(G)
-    D     = eq10_density(G)
-    fw    = eq7_date_guard(arcs, node_date)
-
-    cls_list = [c for c in ALL_CLASSES if c in set(node_class.values())]
-    homo_mat = eq6_homophily(edges, node_class, cls_list)
+    g_L      = eq2_arc_stat(arcs)
+    g_s      = eq4_sender_effect(arcs, node_class)
+    g_r      = eq5_receiver_effect(arcs, node_class)
+    T        = eq9_transitivity(G)
+    D        = eq10_density(G)
+    fw       = eq7_date_guard(arcs, node_date)
+    homo_mat = eq6_homophily(edges, node_class, cls_present)
     g_homo   = int(np.trace(homo_mat))
 
-    n_classes_arr = (
-        attrs["n_classes"].dropna().astype(int).values
-        if "n_classes" in attrs.columns else np.array([])
-    )
-    pct_multi = float((n_classes_arr > 1).mean() * 100) if len(n_classes_arr) else 0.0
+    n_cls_arr = attrs["n_classes"].dropna().astype(int).values if "n_classes" in attrs.columns else np.array([])
+    pct_multi = float((n_cls_arr > 1).mean() * 100) if len(n_cls_arr) > 0 else 0.0
 
-    fig = plt.figure(figsize=(11, 6))
-    gs  = gridspec.GridSpec(2, 3, figure=fig, hspace=0.55, wspace=0.38)
+    vals_s = [g_s.get(c, 0) for c in cls_present]
+    vals_r = [g_r.get(c, 0) for c in cls_present]
+    x = np.arange(len(cls_present))
 
-    # --- Panel A: ERGM formula (Eq.1) ---
-    ax0 = fig.add_subplot(gs[0, 0])
-    ax0.axis("off")
-    eq1_str = (
-        r"$\mathbf{ERGM\ (Eq.\ 1)}$" + "\n\n"
-        r"$\pi(x)=\frac{\exp\!\left(\sum_{s}\theta_s g_s(x)\right)}{Z(\theta)}$"
-        + "\n\n"
-        r"$g_L(x) = \sum_{i,j} x_{ij}$" + f"  $= {g_L:,}$  (Eq. 2)\n"
-        r"$g_\mathrm{send}=\sum_{i,j}a_i x_{ij}$" + "  (Eq. 4)\n"
-        r"$g_\mathrm{rec} =\sum_{i,j}a_j x_{ij}$" + "  (Eq. 5)\n"
-        r"$g_\mathrm{homo}=\sum_{i,j}\delta_{a_i,a_j}x_{ij}$"
-        + f"$= {g_homo:,}$  (Eq. 6)\n"
-        r"$g_\mathrm{date}=\sum_{i,j}H(d_j\!-\!d_i)x_{ij}$"
-        + f"$= {fw:,}$  (Eq. 7)"
-    )
-    ax0.text(0.05, 0.95, eq1_str, transform=ax0.transAxes,
-             va="top", ha="left", fontsize=8.5,
-             bbox=dict(boxstyle="round,pad=0.5", fc="#F7F9FF", ec="#AABBD0", alpha=0.97))
-    ax0.set_title("(A) ERGM Sufficient Statistics", fontsize=9, pad=4)
+    # LaTeX Table
+    tex_path = out_dir / "table_ergm_stats.tex"
+    with open(tex_path, "w") as f:
+        f.write("\\begin{table}[htbp]\n\\centering\n")
+        f.write("\\caption{ERGM Sufficient Statistics Summary}\n")
+        f.write("\\begin{tabular}{ll}\n\\hline\n")
+        f.write("Statistic (Eq.) & Value \\\\\n\\hline\n")
+        f.write(f"Arc count $g_L$ (Eq.2) & {g_L:,} \\\\\n")
+        f.write(f"Transitivity $T$ (Eq.9) & {T:.5f} \\\\\n")
+        f.write(f"Density $D$ (Eq.10) & {D:.3e} \\\\\n")
+        f.write(f"Homophily sum (Eq.6) & {g_homo:,} \\\\\n")
+        f.write(f"Forward arcs $H=1$ (Eq.7) & {fw:,} ({100*fw/max(g_L,1):.1f}\\%) \\\\\n")
+        f.write(f"Multi-class patents & {pct_multi:.1f}\\% \\\\\n")
+        f.write(f"$|V|$ nodes & {G.number_of_nodes():,} \\\\\n")
+        f.write(f"|E| undirected edges & {G.number_of_edges():,} \\\\\n")
+        f.write("\\hline\n\\end{tabular}\n\\end{table}\n")
+    print(f"  [LaTeX] -> {tex_path}")
 
-    # --- Panel B: Sender effect per class (Eq.4) ---
-    ax1 = fig.add_subplot(gs[0, 1])
-    vals_s = [g_s.get(c, 0) for c in cls_list]
-    ax1.bar(range(len(cls_list)), vals_s,
-            color=[cls_color(c) for c in cls_list],
-            edgecolor="white", linewidth=0.2)
-    ax1.set_xticks(range(len(cls_list)))
-    ax1.set_xticklabels(cls_list, rotation=90, fontsize=6.5)
-    ax1.set_ylabel(r"$g_\mathrm{send}(x;a)$", fontsize=8)
-    ax1.set_title(r"(B) Sender Effect $g_\mathrm{send}$ (Eq. 4)", fontsize=9, pad=4)
-    ax1.yaxis.set_major_formatter(
-        FuncFormatter(lambda x, _: f"{x/1000:.0f}k" if x >= 1000 else f"{int(x)}"))
-
-    # --- Panel C: Receiver effect per class (Eq.5) ---
-    ax2 = fig.add_subplot(gs[0, 2])
-    vals_r = [g_r.get(c, 0) for c in cls_list]
-    ax2.bar(range(len(cls_list)), vals_r,
-            color=[cls_color(c) for c in cls_list],
-            edgecolor="white", linewidth=0.2)
-    ax2.set_xticks(range(len(cls_list)))
-    ax2.set_xticklabels(cls_list, rotation=90, fontsize=6.5)
-    ax2.set_ylabel(r"$g_\mathrm{rec}(x;a)$", fontsize=8)
-    ax2.set_title(r"(C) Receiver Effect $g_\mathrm{rec}$ (Eq. 5)", fontsize=9, pad=4)
-    ax2.yaxis.set_major_formatter(
-        FuncFormatter(lambda x, _: f"{x/1000:.0f}k" if x >= 1000 else f"{int(x)}"))
-
-    # --- Panel D: Sender vs. Receiver scatter ---
-    ax3 = fig.add_subplot(gs[1, 0])
-    p75_s = float(np.percentile(vals_s, 75)) if vals_s else 0
-    p75_r = float(np.percentile(vals_r, 75)) if vals_r else 0
-    for c in cls_list:
-        ax3.scatter(g_s.get(c, 0), g_r.get(c, 0),
-                    color=cls_color(c), s=30,
-                    edgecolors="white", linewidths=0.3, zorder=3, alpha=0.9)
-        if g_s.get(c, 0) > p75_s or g_r.get(c, 0) > p75_r:
-            ax3.annotate(c, (g_s.get(c, 0), g_r.get(c, 0)),
-                         fontsize=6.5, ha="left", va="bottom", color="#333")
-    lim = max(ax3.get_xlim()[1], ax3.get_ylim()[1])
-    ax3.plot([0, lim], [0, lim], "k--", lw=0.7, alpha=0.5, label="Send = Receive")
-    ax3.set_xlabel(r"$g_\mathrm{send}$ (Eq. 4)", fontsize=8)
-    ax3.set_ylabel(r"$g_\mathrm{rec}$ (Eq. 5)", fontsize=8)
-    ax3.set_title("(D) Sender vs. Receiver Effect", fontsize=9, pad=4)
-    ax3.legend(fontsize=7)
-
-    # --- Panel E: Key parameters summary ---
-    ax4 = fig.add_subplot(gs[1, 1])
-    metrics = {
-        r"$T$ (Eq.9)":        T,
-        r"$D$ (Eq.10)":       D,
-        r"$D\!\times\!10^6$": D * 1e6,
-        r"Multi-class %":     pct_multi / 100,
-        r"Homophily ratio":   g_homo / max(g_L, 1),
-    }
-    colors4 = ["#1f77b4", "#ff7f0e", "#ff7f0e", "#2ca02c", "#9467bd"]
-    bars4 = ax4.bar(range(len(metrics)), list(metrics.values()),
-                    color=colors4, edgecolor="white")
-    ax4.set_xticks(range(len(metrics)))
-    ax4.set_xticklabels(list(metrics.keys()), fontsize=7.5)
-    for bar, val in zip(bars4, metrics.values()):
-        ax4.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.02,
-                 f"{val:.3g}", ha="center", va="bottom", fontsize=7)
-    ax4.set_title("(E) Key Network Parameters", fontsize=9, pad=4)
-    ax4.set_ylabel("Value", fontsize=8)
-
-    # --- Panel F: Date guard distribution (Eq.7-8) ---
-    ax5 = fig.add_subplot(gs[1, 2])
-    if node_date:
-        valid_arcs = [(i, j) for i, j in arcs if i in node_date and j in node_date]
-        if valid_arcs:
-            diff_days = [(node_date[j] - node_date[i]).days for i, j in valid_arcs]
-            diff_arr  = np.array(diff_days, dtype=float)
-            bins = np.linspace(diff_arr.min(), diff_arr.max(), 40)
-            neg_bins = bins[bins <= 0]
-            pos_bins = bins[bins > 0]
-            if len(neg_bins) > 1:
-                ax5.hist(diff_arr[diff_arr <= 0], bins=neg_bins,
-                         color="#2ca02c", alpha=0.8, label=r"$H\!=\!0$: valid ($d_j\!\leq\!d_i$)")
-            if len(pos_bins) > 1:
-                ax5.hist(diff_arr[diff_arr > 0], bins=pos_bins,
-                         color="#d62728", alpha=0.8, label=r"$H\!=\!1$: fwd ($d_j\!>\!d_i$)")
-            ax5.axvline(0, color="black", lw=1.0, linestyle="--")
-            ax5.set_xlabel(r"$d_j - d_i$ (days)", fontsize=8)
-            ax5.set_ylabel("Arc count", fontsize=8)
-            ax5.legend(fontsize=7)
-        else:
-            ax5.text(0.5, 0.5, "No valid\ndate arcs",
-                     transform=ax5.transAxes, ha="center", va="center",
-                     fontsize=9, color="grey")
-    else:
-        ax5.text(0.5, 0.5, "Date data\nnot available",
-                 transform=ax5.transAxes, ha="center", va="center",
-                 fontsize=9, color="grey")
-    ax5.set_title(r"(F) Date Guard $H(d_j\!-\!d_i)$ (Eqs. 7-8)", fontsize=9, pad=4)
-
-    fig.suptitle(
-        "ERGM Sufficient Statistics -- Chakraborty et al. (2020) Eqs. 1-8",
-        fontsize=10, fontweight="bold", y=1.01)
-    fig.savefig(out_path)
+    # Sender Effect
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    ax.bar(x, vals_s, color=[cls_color(c) for c in cls_present], edgecolor="black", linewidth=0.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels(cls_present, rotation=90, fontsize=8)
+    ax.set_ylabel("Arc count  g_send  (Eq.4)")
+    ax.set_title("Sender Effect per D-class [Eq.4]", fontsize=11, fontweight="bold")
+    fig.tight_layout()
+    p = out_dir / "fig2a_sender_effect.png"
+    fig.savefig(p)
     plt.close(fig)
-    print(f"  [Fig2] -> {out_path}")
+    print(f"  [Fig2a] -> {p}")
 
+    # Receiver Effect
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    ax.bar(x, vals_r, color=[cls_color(c) for c in cls_present], edgecolor="black", linewidth=0.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels(cls_present, rotation=90, fontsize=8)
+    ax.set_ylabel("Arc count  g_rec  (Eq.5)")
+    ax.set_title("Receiver Effect per D-class [Eq.5]", fontsize=11, fontweight="bold")
+    fig.tight_layout()
+    p = out_dir / "fig2b_receiver_effect.png"
+    fig.savefig(p)
+    plt.close(fig)
+    print(f"  [Fig2b] -> {p}")
 
-# ---------------------------------------------------------------------------
-# Figure 3 -- Degree & Betweenness distributions  (Eq.10, Eq.11)
-# ---------------------------------------------------------------------------
-def fig3_degree_distribution(
-    G: nx.Graph,
-    out_path: Path,
-    bc_k: int = 500,
-) -> None:
-    """Three-panel figure: degree CCDF, betweenness CCDF, degree-betweenness scatter."""
+    # Scatter
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    for c in cls_present:
+        ax.scatter(g_s.get(c, 0), g_r.get(c, 0),
+                   color=cls_color(c), s=50, edgecolors="black", alpha=0.9)
+    lim = max(max(vals_s, default=1), max(vals_r, default=1)) * 1.05
+    ax.plot([0, lim], [0, lim], "k--", lw=1.0, alpha=0.6, label="g_send = g_rec")
+    ax.set_xlabel("g_send (Eq.4)")
+    ax.set_ylabel("g_rec (Eq.5)")
+    ax.set_title("Sender vs. Receiver Effect by Class", fontsize=11, fontweight="bold")
+    ax.legend()
+    fig.tight_layout()
+    p = out_dir / "fig2c_sender_vs_receiver.png"
+    fig.savefig(p)
+    plt.close(fig)
+    print(f"  [Fig2c] -> {p}")
+
+# ─────────────────────────────────────────────────────────────────────
+# Fig 3 — Degree distribution + Betweenness (Split)
+# ─────────────────────────────────────────────────────────────────────
+def fig3_degree_distribution(G: nx.Graph, out_dir: Path, bc_k: int = 500) -> None:
     degs   = degree_arrays(G)
     bc     = eq11_betweenness(G, k=bc_k)
-    bc_arr = np.array([bc.get(n, 0.0) for n in range(G.number_of_nodes())])
+    bc_arr = np.array([bc.get(n, 0) for n in G.nodes()])
 
-    deg_pos  = degs[degs > 0]
-    vals_d, prob_d = ccdf(deg_pos)
-    bc_pos   = bc_arr[bc_arr > 0]
-    vals_bc, prob_bc = ccdf(bc_pos) if len(bc_pos) > 0 else (np.array([]), np.array([]))
+    deg_pos = degs[degs > 0]
+    bc_pos  = bc_arr[bc_arr > 0]
+    vals_d,  prob_d  = ccdf(deg_pos)
+    vals_bc, prob_bc = ccdf(bc_pos)
+    gamma_d,  b_d  = powerlaw_fit(vals_d,  prob_d)
+    gamma_bc, b_bc = powerlaw_fit(vals_bc, prob_bc)
 
-    def powerlaw_fit(x: np.ndarray, y: np.ndarray):
-        mask = y > 0
-        if mask.sum() < 3:
-            return None, None
-        lx = np.log10(x[mask]); ly = np.log10(y[mask])
-        m, b = np.polyfit(lx, ly, 1)
-        return m, b
-
-    gamma_d,  b_d  = powerlaw_fit(vals_d, prob_d)
-    gamma_bc, b_bc = powerlaw_fit(vals_bc, prob_bc) if len(vals_bc) else (None, None)
-
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4.5))
-    ax_deg, ax_bc, ax_scat = axes
-
-    # Panel A: Degree CCDF
-    ax_deg.loglog(vals_d, prob_d, "o", ms=3.5, color="#1f77b4",
-                  alpha=0.75, label="CCDF  $P(K \geq k)$", zorder=3)
+    # A: Degree CCDF
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    ax.loglog(vals_d, prob_d, "o", mfc="none", mec="#1f77b4", ms=5,
+              label="Empirical CCDF")
     if gamma_d is not None:
-        xf = np.logspace(np.log10(vals_d.min()), np.log10(vals_d.max()), 80)
-        ax_deg.loglog(xf, 10**b_d * xf**gamma_d, "--", color="#d62728", lw=1.2,
-                      label=fr"Power-law  $\gamma = {gamma_d:.2f}$")
-    D_val = eq10_density(G)
-    ax_deg.set_xlabel(r"Degree $k$", fontsize=9)
-    ax_deg.set_ylabel(r"$P(K \geq k)$", fontsize=9)
-    ax_deg.set_title(
-        r"(A) Degree CCDF  (Eq. 10)" + "\n"
-        r"$D = |E|\,/\,(|V|(|V|-1))$", fontsize=9)
-    ax_deg.legend(fontsize=8)
-    ax_deg.text(0.97, 0.97, f"$D = {D_val:.2e}$",
-                transform=ax_deg.transAxes, ha="right", va="top", fontsize=8,
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#AAA"))
-
-    # Panel B: Betweenness CCDF
-    if len(vals_bc) > 1:
-        ax_bc.loglog(vals_bc, prob_bc, "s", ms=3.5, color="#ff7f0e",
-                     alpha=0.75, label="CCDF  $P(G \geq g)$", zorder=3)
-        if gamma_bc is not None:
-            xf = np.logspace(np.log10(vals_bc.min()), np.log10(vals_bc.max()), 80)
-            ax_bc.loglog(xf, 10**b_bc * xf**gamma_bc, "--", color="#9467bd", lw=1.2,
-                         label=fr"Power-law  $\gamma = {gamma_bc:.2f}$")
-    else:
-        ax_bc.text(0.5, 0.5, "Insufficient data",
-                   transform=ax_bc.transAxes, ha="center", va="center", color="grey")
-    ax_bc.set_xlabel(r"Betweenness $g(v)$  (Eq. 11)", fontsize=9)
-    ax_bc.set_ylabel(r"$P(G \geq g)$", fontsize=9)
-    ax_bc.set_title(r"(B) Betweenness Centrality CCDF  (Eq. 11)", fontsize=9)
-    ax_bc.legend(fontsize=8)
-
-    # Panel C: Degree vs. Betweenness
-    deg_arr  = np.array([degs[n] for n in G.nodes()])
-    bc_all   = np.array([bc.get(n, 0.0) for n in G.nodes()])
-    valid    = (deg_arr > 0) & (bc_all > 0)
-    ax_scat.loglog(deg_arr[valid], bc_all[valid], ".", ms=2.5,
-                   alpha=0.35, color="#2ca02c")
-    ax_scat.set_xlabel(r"Degree $k$", fontsize=9)
-    ax_scat.set_ylabel(r"Betweenness $g(v)$  (Eq. 11)", fontsize=9)
-    ax_scat.set_title("(C) Degree vs. Betweenness", fontsize=9)
-    if valid.sum() > 10:
-        r_log = np.corrcoef(np.log10(deg_arr[valid]), np.log10(bc_all[valid]))[0, 1]
-        ax_scat.text(0.05, 0.97, fr"$r_{{\log}} = {r_log:.3f}$",
-                     transform=ax_scat.transAxes, va="top", fontsize=8,
-                     bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#AAA"))
-
-    fig.suptitle(
-        r"Degree Distribution & Betweenness Centrality -- Eqs. 10-11",
-        fontsize=10, fontweight="bold")
+        xfit = np.logspace(np.log10(vals_d.min()), np.log10(vals_d.max()), 80)
+        ax.loglog(xfit, 10**b_d * xfit**gamma_d, "--", color="#d62728", lw=1.5,
+                  label=f"Power-law fit (gamma = {gamma_d:.2f})")
+    ax.set_xlabel("Degree k")
+    ax.set_ylabel("P(K >= k) [CCDF]")
+    ax.set_title("Degree CCDF [Eq.10]", fontweight="bold")
+    ax.legend()
     fig.tight_layout()
-    fig.savefig(out_path)
+    p = out_dir / "fig3a_degree_ccdf.png"
+    fig.savefig(p)
     plt.close(fig)
-    print(f"  [Fig3] -> {out_path}")
+    print(f"  [Fig3a] -> {p}")
 
+    # B: Betweenness CCDF
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    if len(vals_bc) > 1:
+        ax.loglog(vals_bc, prob_bc, "s", mfc="none", mec="#ff7f0e", ms=5,
+                  label="Empirical CCDF")
+        if gamma_bc is not None:
+            xfit = np.logspace(np.log10(vals_bc.min()), np.log10(vals_bc.max()), 80)
+            ax.loglog(xfit, 10**b_bc * xfit**gamma_bc, "--", color="#9467bd", lw=1.5,
+                      label=f"Power-law fit (gamma = {gamma_bc:.2f})")
+    ax.set_xlabel("Betweenness centrality g(v) [Eq.11]")
+    ax.set_ylabel("P(G >= g) [CCDF]")
+    ax.set_title("Betweenness Centrality CCDF", fontweight="bold")
+    ax.legend()
+    fig.tight_layout()
+    p = out_dir / "fig3b_betweenness_ccdf.png"
+    fig.savefig(p)
+    plt.close(fig)
+    print(f"  [Fig3b] -> {p}")
 
-# ---------------------------------------------------------------------------
-# Figure 4 -- Homophily heatmap  (Eq.6)
-# ---------------------------------------------------------------------------
-def fig4_homophily_heatmap(
-    G: nx.Graph,
-    edges: list,
-    out_path: Path,
-) -> None:
-    """Two-panel heatmap: raw co-citation count and row-normalized fraction."""
+    # C: Degree vs Betweenness
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    valid = (degs > 0) & (bc_arr > 0)
+    ax.loglog(degs[valid], bc_arr[valid], ".", ms=4, alpha=0.4, color="#2ca02c")
+    ax.set_xlabel("Degree k")
+    ax.set_ylabel("Betweenness g(v) [Eq.11]")
+    ax.set_title("Degree vs. Betweenness (log-log)", fontweight="bold")
+    fig.tight_layout()
+    p = out_dir / "fig3c_degree_vs_betweenness.png"
+    fig.savefig(p)
+    plt.close(fig)
+    print(f"  [Fig3c] -> {p}")
+
+# ─────────────────────────────────────────────────────────────────────
+# Fig 4 — Homophily matrix (Split)
+# ─────────────────────────────────────────────────────────────────────
+def fig4_homophily_heatmap(G: nx.Graph, edges, out_dir: Path) -> None:
     node_class  = {i: G.nodes[i].get("primary_class", "Unknown") for i in G.nodes()}
     cls_present = [c for c in ALL_CLASSES if c in set(node_class.values())]
     mat = eq6_homophily(edges, node_class, cls_present)
@@ -704,218 +637,177 @@ def fig4_homophily_heatmap(
     with np.errstate(invalid="ignore", divide="ignore"):
         mat_norm = np.where(row_sum > 0, mat / row_sum, 0.0)
 
-    fig, (ax_raw, ax_norm) = plt.subplots(1, 2, figsize=(13, 6.5))
-
-    # Panel A: raw count (log scale)
-    im0 = ax_raw.imshow(np.log1p(mat), cmap="Blues", aspect="auto")
-    ax_raw.set_xticks(range(len(cls_present)))
-    ax_raw.set_xticklabels(cls_present, rotation=90, fontsize=7)
-    ax_raw.set_yticks(range(len(cls_present)))
-    ax_raw.set_yticklabels(cls_present, fontsize=7)
-    plt.colorbar(im0, ax=ax_raw, shrink=0.75, label=r"$\log(1 + \mathrm{count})$")
-    ax_raw.set_title(
-        r"(A) $g_\mathrm{homo}(x)=\sum_{i,j}\delta(a_i,a_j)x_{ij}$  (Eq. 6)"
-        "\nRaw co-citation count  [log scale]", fontsize=9)
-    ax_raw.set_xlabel(r"D-class (target node $j$)", fontsize=8)
-    ax_raw.set_ylabel(r"D-class (source node $i$)", fontsize=8)
-    for k in range(len(cls_present)):
-        ax_raw.add_patch(plt.Rectangle((k - 0.5, k - 0.5), 1, 1,
-                                       fill=False, edgecolor="red", lw=1.2, zorder=3))
-
-    # Panel B: row-normalized
-    im1 = ax_norm.imshow(mat_norm, cmap="Oranges", aspect="auto", vmin=0, vmax=1)
-    ax_norm.set_xticks(range(len(cls_present)))
-    ax_norm.set_xticklabels(cls_present, rotation=90, fontsize=7)
-    ax_norm.set_yticks(range(len(cls_present)))
-    ax_norm.set_yticklabels(cls_present, fontsize=7)
-    plt.colorbar(im1, ax=ax_norm, shrink=0.75, label="Row-normalized fraction")
-    ax_norm.set_title(
-        r"(B) Normalized homophily matrix" + "\n"
-        r"$\hat{H}_{ij} = g_\mathrm{homo}\,/\,\mathrm{row\ sum}$  "
-        "(diagonal = within-class rate)", fontsize=9)
-    ax_norm.set_xlabel(r"D-class (target node $j$)", fontsize=8)
-    ax_norm.set_ylabel(r"D-class (source node $i$)", fontsize=8)
-    for k in range(len(cls_present)):
-        ax_norm.add_patch(plt.Rectangle((k - 0.5, k - 0.5), 1, 1,
-                                        fill=False, edgecolor="navy", lw=1.2, zorder=3))
-
-    fig.suptitle(
-        r"Homophily Matrix -- $g_\mathrm{homo}(x)=\sum_{i,j}\delta(a_i,a_j)x_{ij}$  (Eq. 6)"
-        "\nDiagonal = same-class co-citations (within-class homophily)",
-        fontsize=10, fontweight="bold")
+    # Raw Heatmap
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    im0 = ax.imshow(np.log1p(mat), cmap="Blues", aspect="auto")
+    ax.set_xticks(range(len(cls_present)))
+    ax.set_xticklabels(cls_present, rotation=90, fontsize=7)
+    ax.set_yticks(range(len(cls_present)))
+    ax.set_yticklabels(cls_present, fontsize=7)
+    plt.colorbar(im0, ax=ax, label="log(1 + count)")
+    ax.set_title("Co-citation Count Matrix log(1+count) [Eq.6]", fontweight="bold")
+    ax.set_xlabel("D-class (target j)")
+    ax.set_ylabel("D-class (source i)")
     fig.tight_layout()
-    fig.savefig(out_path)
+    p = out_dir / "fig4a_homophily_raw.png"
+    fig.savefig(p)
     plt.close(fig)
-    print(f"  [Fig4] -> {out_path}")
+    print(f"  [Fig4a] -> {p}")
 
+    # Norm Heatmap
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    im1 = ax.imshow(mat_norm, cmap="Oranges", aspect="auto", vmin=0, vmax=1)
+    ax.set_xticks(range(len(cls_present)))
+    ax.set_xticklabels(cls_present, rotation=90, fontsize=7)
+    ax.set_yticks(range(len(cls_present)))
+    ax.set_yticklabels(cls_present, fontsize=7)
+    plt.colorbar(im1, ax=ax, label="Row-normalised fraction")
+    ax.set_title("Row-Normalised Homophily H_ij / row_sum", fontweight="bold")
+    ax.set_xlabel("D-class (target j)")
+    ax.set_ylabel("D-class (source i)")
+    fig.tight_layout()
+    p = out_dir / "fig4b_homophily_norm.png"
+    fig.savefig(p)
+    plt.close(fig)
+    print(f"  [Fig4b] -> {p}")
 
-# ---------------------------------------------------------------------------
-# Figure 5 -- Sender / Receiver per class  (Eq.4, Eq.5)
-# ---------------------------------------------------------------------------
-def fig5_sender_receiver(
-    G: nx.Graph,
-    arcs: list,
-    out_path: Path,
-) -> None:
-    """Two-panel bar chart: absolute and per-node-normalized send/receive effects."""
+# ─────────────────────────────────────────────────────────────────────
+# Fig 5 — Sender / Receiver per class (Split)
+# ─────────────────────────────────────────────────────────────────────
+def fig5_sender_receiver(G: nx.Graph, arcs, out_dir: Path) -> None:
     node_class  = {i: G.nodes[i].get("primary_class", "Unknown") for i in G.nodes()}
     cls_present = [c for c in ALL_CLASSES if c in set(node_class.values())]
     g_s = eq4_sender_effect(arcs, node_class)
     g_r = eq5_receiver_effect(arcs, node_class)
 
-    node_count: dict[str, int] = defaultdict(int)
+    node_count = defaultdict(int)
     for c in node_class.values():
         node_count[c] += 1
+
     gs_norm = {c: g_s.get(c, 0) / max(node_count[c], 1) for c in cls_present}
     gr_norm = {c: g_r.get(c, 0) / max(node_count[c], 1) for c in cls_present}
 
-    x = np.arange(len(cls_present))
+    order = sorted(cls_present, key=lambda c: g_s.get(c, 0) + g_r.get(c, 0), reverse=True)
+    x = np.arange(len(order))
     w = 0.38
 
-    fig, (ax_abs, ax_norm) = plt.subplots(2, 1, figsize=(12, 8))
-
-    # Panel A: absolute counts
-    ax_abs.bar(x - w / 2, [g_s.get(c, 0) for c in cls_present], width=w,
-               color=[cls_color(c) for c in cls_present],
-               label=r"Sender $g_\mathrm{send}$ (Eq. 4)", edgecolor="white", alpha=0.9)
-    ax_abs.bar(x + w / 2, [g_r.get(c, 0) for c in cls_present], width=w,
-               color=[cls_color(c) for c in cls_present], hatch="//",
-               label=r"Receiver $g_\mathrm{rec}$ (Eq. 5)", edgecolor="white", alpha=0.7)
-    ax_abs.set_xticks(x)
-    ax_abs.set_xticklabels(cls_present, rotation=90, fontsize=7)
-    ax_abs.set_ylabel("Arc count", fontsize=8)
-    ax_abs.set_title(
-        r"(A) Absolute Sender $g_\mathrm{send}$ and Receiver $g_\mathrm{rec}$ Effects",
-        fontsize=9)
-    ax_abs.legend(fontsize=8)
-    ax_abs.yaxis.set_major_formatter(
-        FuncFormatter(lambda v, _: f"{v/1000:.0f}k" if v >= 1000 else str(int(v))))
-
-    # Panel B: per-node normalized
-    ax_norm.bar(x - w / 2, [gs_norm[c] for c in cls_present], width=w,
-                color=[cls_color(c) for c in cls_present],
-                label="Sender / node count", edgecolor="white", alpha=0.9)
-    ax_norm.bar(x + w / 2, [gr_norm[c] for c in cls_present], width=w,
-                color=[cls_color(c) for c in cls_present], hatch="//",
-                label="Receiver / node count", edgecolor="white", alpha=0.7)
-    ax_norm.set_xticks(x)
-    ax_norm.set_xticklabels(
-        [f"{c}\n{CLASS_NAMES.get(c,'')[:12]}" for c in cls_present],
-        rotation=90, fontsize=6.5)
-    ax_norm.set_ylabel("Arcs per node", fontsize=8)
-    ax_norm.set_title(
-        r"(B) Normalized Effects -- arcs per node  "
-        "(higher = stronger sender/receiver tendency)", fontsize=9)
-    ax_norm.legend(fontsize=8)
-
-    fig.suptitle(
-        r"Sender $g_\mathrm{send}=\sum_{i,j}a_i x_{ij}$ (Eq. 4)  and  "
-        r"Receiver $g_\mathrm{rec}=\sum_{i,j}a_j x_{ij}$ (Eq. 5)  by D-class",
-        fontsize=10, fontweight="bold")
+    # Absolute
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(x - w/2, [g_s.get(c, 0) for c in order], width=w,
+           color=[cls_color(c) for c in order], edgecolor="black", label="Sender")
+    ax.bar(x + w/2, [g_r.get(c, 0) for c in order], width=w,
+           color=[cls_color(c) for c in order], edgecolor="black", hatch="//",
+           alpha=0.7, label="Receiver")
+    ax.set_xticks(x)
+    ax.set_xticklabels(order, rotation=90, fontsize=8)
+    ax.set_ylabel("Arc count")
+    ax.set_title("Absolute Sender/Receiver Effects [Eqs. 4-5]", fontweight="bold")
+    ax.legend()
     fig.tight_layout()
-    fig.savefig(out_path)
+    p = out_dir / "fig5a_effects_absolute.png"
+    fig.savefig(p)
     plt.close(fig)
-    print(f"  [Fig5] -> {out_path}")
+    print(f"  [Fig5a] -> {p}")
 
+    # Normalised
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(x - w/2, [gs_norm[c] for c in order], width=w,
+           color=[cls_color(c) for c in order], edgecolor="black", label="Sender rate")
+    ax.bar(x + w/2, [gr_norm[c] for c in order], width=w,
+           color=[cls_color(c) for c in order], edgecolor="black", hatch="//",
+           alpha=0.7, label="Receiver rate")
+    ax.set_xticks(x)
+    ax.set_xticklabels(order, rotation=90, fontsize=8)
+    ax.set_ylabel("Arcs per node")
+    ax.set_title("Normalised Effects (arcs per node)", fontweight="bold")
+    ax.legend()
+    fig.tight_layout()
+    p = out_dir / "fig5b_effects_normalised.png"
+    fig.savefig(p)
+    plt.close(fig)
+    print(f"  [Fig5b] -> {p}")
 
-# ---------------------------------------------------------------------------
-# Figure 6 -- GW network statistics
-# ---------------------------------------------------------------------------
-def fig6_gw_statistics(G: nx.Graph, out_path: Path) -> None:
-    """Four-panel figure showing GWIDegree, GWODegree, GWESP, GWDSP."""
-    alphas = np.linspace(0.5, 4.0, 15)
-    gw_id_v  = [gw_idegree(G, a) for a in alphas]
-    gw_od_v  = [gw_odegree(G, a) for a in alphas]
-    gw_esp_v = [gw_esp(G, a)     for a in alphas]
+# ─────────────────────────────────────────────────────────────────────
+# Fig 6 — GW network statistics (Split & LaTeX)
+# ─────────────────────────────────────────────────────────────────────
+def fig6_gw_statistics(G: nx.Graph, out_dir: Path) -> None:
+    alphas      = np.linspace(0.5, 4.0, 14)
+    gw_id_vals  = [gw_idegree(G, a) for a in alphas]
+    gw_od_vals  = [gw_odegree(G, a) for a in alphas]
+    gw_esp_vals = [gw_esp(G, a) for a in alphas]
+    gw_dsp_val  = gw_dsp(G, alpha=2.0)
+    T_val       = eq9_transitivity(G)
 
-    print("    computing GWDSP (slow for large graphs)...")
-    gw_dsp_val = gw_dsp(G, alpha=2.0)
+    # GW Degree
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    ax.plot(alphas, gw_id_vals, "o-", color="#1f77b4", label="GWIDegree")
+    ax.plot(alphas, gw_od_vals, "s--", color="#ff7f0e", label="GWODegree")
+    ax.set_xlabel("Decay parameter alpha")
+    ax.set_ylabel("GWDegree value")
+    ax.set_title("GWIDegree & GWODegree vs. alpha", fontweight="bold")
+    ax.legend()
+    fig.tight_layout()
+    p = out_dir / "fig6a_gw_degree.png"
+    fig.savefig(p)
+    plt.close(fig)
+    print(f"  [Fig6a] -> {p}")
 
-    # ESP distribution at alpha=2
-    esp_counts: dict[int, int] = defaultdict(int)
+    # GWESP
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    ax.plot(alphas, gw_esp_vals, "^-", color="#2ca02c", label="GWESP")
+    ax.set_xlabel("Decay parameter alpha")
+    ax.set_ylabel("GWESP value")
+    ax.set_title("GWESP vs. alpha", fontweight="bold")
+    ax.legend()
+    fig.tight_layout()
+    p = out_dir / "fig6b_gwesp.png"
+    fig.savefig(p)
+    plt.close(fig)
+    print(f"  [Fig6b] -> {p}")
+
+    # ESP Count
+    esp_counts = defaultdict(int)
     for u, v in G.edges():
         shared = len(set(G.neighbors(u)) & set(G.neighbors(v)))
         esp_counts[shared] += 1
-    esp_k   = sorted(esp_counts.keys())
+    esp_k    = sorted(esp_counts)
     esp_freq = [esp_counts[k] for k in esp_k]
 
-    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
-    (ax_gw, ax_esp_curve), (ax_esp_dist, ax_summary) = axes
-
-    # Panel A: GWIDeg / GWODeg vs alpha
-    ax_gw.plot(alphas, gw_id_v, "o-", color="#1f77b4", label="GWIDegree (AltInStar)",  ms=4)
-    ax_gw.plot(alphas, gw_od_v, "s--", color="#ff7f0e", label="GWODegree (AltOutStar)", ms=4)
-    ax_gw.set_xlabel(r"Decay parameter $\alpha$", fontsize=8)
-    ax_gw.set_ylabel(r"$\sum_k e^{-\alpha k}$ count", fontsize=8)
-    ax_gw.set_title(r"(A) GWIDegree & GWODegree vs. $\alpha$", fontsize=9)
-    ax_gw.legend(fontsize=8)
-
-    # Panel B: GWESP vs alpha
-    ax_esp_curve.plot(alphas, gw_esp_v, "^-", color="#2ca02c",
-                      label="GWESP (AltKTriangleT)", ms=4)
-    ax_esp_curve.set_xlabel(r"Decay parameter $\alpha$", fontsize=8)
-    ax_esp_curve.set_ylabel("GWESP value", fontsize=8)
-    ax_esp_curve.set_title(r"(B) GWESP (AltKTriangleT) vs. $\alpha$", fontsize=9)
-    ax_esp_curve.legend(fontsize=8)
-
-    # Panel C: ESP distribution
-    ax_esp_dist.bar(esp_k[:20], esp_freq[:20], color="#9467bd",
-                    edgecolor="white", width=0.7)
-    ax_esp_dist.set_xlabel("# shared partners (ESP)", fontsize=8)
-    ax_esp_dist.set_ylabel("Edge count", fontsize=8)
-    ax_esp_dist.set_title(
-        "(C) Edgewise Shared Partner Distribution\n"
-        r"AltKTriangleT: $\theta>0$ $\Rightarrow$ transitivity", fontsize=9)
-    ax_esp_dist.set_yscale("log")
-    T_val = eq9_transitivity(G)
-    ax_esp_dist.text(0.97, 0.97, f"$T$ (Eq.9) $= {T_val:.4f}$",
-                     transform=ax_esp_dist.transAxes, ha="right", va="top", fontsize=8,
-                     bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#AAA"))
-
-    # Panel D: Summary & interpretation
-    ax_summary.axis("off")
-    summary_text = (
-        r"$\mathbf{GW\ Network\ Statistics\ Summary}$" + "\n\n"
-        r"GWIDegree $(\alpha=2)$ $= $" + f"{gw_idegree(G, 2.0):.3e}\n"
-        r"GWODegree $(\alpha=2)$ $= $" + f"{gw_odegree(G, 2.0):.3e}\n"
-        r"GWESP $(\alpha=2)$ $= $"      + f"{gw_esp(G, 2.0):.3e}\n"
-        r"GWDSP $(\alpha=2)$ $= $"      + f"{gw_dsp_val:.3e}\n\n"
-        "Interpretation (Chakraborty et al. 2020, Table 7):\n"
-        r"  $\theta_\mathrm{AltKTriT}>0$: transitivity (citation snowball)" + "\n"
-        r"  $\theta_\mathrm{AltTwoPaths}<0$: triangles dominate open paths" + "\n"
-        r"  $\theta_\mathrm{AltInStar}<0$: no strong preferential attachment"
-    )
-    ax_summary.text(0.05, 0.95, summary_text, transform=ax_summary.transAxes,
-                    va="top", fontsize=8.5,
-                    bbox=dict(boxstyle="round,pad=0.6", fc="#F7FFF7",
-                              ec="#88BB88", alpha=0.95))
-    ax_summary.set_title("(D) Summary & Interpretation", fontsize=9)
-
-    fig.suptitle(
-        "Geometrically-Weighted Network Statistics\n"
-        "GWIDegree · GWODegree · GWESP (AltKTriangleT) · GWDSP (AltTwoPathsTD)",
-        fontsize=10, fontweight="bold")
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    ax.bar(esp_k[:25], esp_freq[:25], color="#9467bd", edgecolor="black")
+    ax.set_xlabel("Shared partners k (ESP)")
+    ax.set_ylabel("Edge count")
+    ax.set_yscale("log")
+    ax.set_title("Edgewise Shared Partner Distribution", fontweight="bold")
     fig.tight_layout()
-    fig.savefig(out_path)
+    p = out_dir / "fig6c_esp_dist.png"
+    fig.savefig(p)
     plt.close(fig)
-    print(f"  [Fig6] -> {out_path}")
+    print(f"  [Fig6c] -> {p}")
 
+    # LaTeX Table
+    tex_path = out_dir / "table_gw_stats.tex"
+    with open(tex_path, "w") as f:
+        f.write("\\begin{table}[htbp]\n\\centering\n")
+        f.write("\\caption{GW Statistics Summary ($\\alpha=2$)}\n")
+        f.write("\\begin{tabular}{lc}\n\\hline\n")
+        f.write("Statistic & Value \\\\\n\\hline\n")
+        f.write(f"GWIDegree & {gw_idegree(G, 2.0):.4e} \\\\\n")
+        f.write(f"GWODegree & {gw_odegree(G, 2.0):.4e} \\\\\n")
+        f.write(f"GWESP & {gw_esp(G, 2.0):.4e} \\\\\n")
+        f.write(f"GWDSP & {gw_dsp_val:.4e} \\\\\n")
+        f.write(f"Transitivity $T$ & {T_val:.5f} \\\\\n")
+        f.write("\\hline\n\\end{tabular}\n\\end{table}\n")
+    print(f"  [LaTeX] -> {tex_path}")
 
-# ---------------------------------------------------------------------------
-# Figure 7 -- Temporal citation bias  (Eq.7, Eq.8)
-# ---------------------------------------------------------------------------
-def fig7_date_guard(
-    G: nx.Graph,
-    arcs: list,
-    attrs: pd.DataFrame,
-    out_path: Path,
-) -> None:
-    """Three-panel figure on date guard statistics."""
+# ─────────────────────────────────────────────────────────────────────
+# Fig 7 — Date guard (Split)
+# ─────────────────────────────────────────────────────────────────────
+def fig7_date_guard(G: nx.Graph, arcs, attrs: pd.DataFrame, out_dir: Path) -> None:
     if "date" not in attrs.columns:
-        print("  [Fig7] 'date' column missing -- skipping")
         return
 
-    node_date: dict = {}
+    node_date = {}
     for i, row in attrs.iterrows():
         try:
             node_date[i] = pd.to_datetime(row["date"])
@@ -924,145 +816,209 @@ def fig7_date_guard(
 
     valid = [(i, j) for i, j in arcs if i in node_date and j in node_date]
     if not valid:
-        print("  [Fig7] no valid date arcs -- skipping")
         return
 
-    diff_years = np.array([(node_date[j] - node_date[i]).days / 365.25
-                           for i, j in valid], dtype=float)
-    n_fwd   = int((diff_years > 0).sum())
-    pct_fwd = 100 * n_fwd / max(len(diff_years), 1)
+    diff_years = np.array([(node_date[j] - node_date[i]).days / 365.25 for i, j in valid])
 
-    fig, (ax_hist, ax_hfunc, ax_cumul) = plt.subplots(1, 3, figsize=(13, 4.5))
-
-    # Panel A: histogram
-    lo = max(float(diff_years.min()), -30)
-    hi = min(float(diff_years.max()), 30)
-    bins = np.linspace(lo, hi, 60)
-    neg = bins[bins <= 0]; pos = bins[bins > 0]
-    if len(neg) > 1:
-        ax_hist.hist(diff_years[diff_years <= 0], bins=neg,
-                     color="#1f77b4", alpha=0.85,
-                     label=r"$H\!=\!0$: valid ($d_j\!\leq\!d_i$)")
-    if len(pos) > 1:
-        ax_hist.hist(diff_years[diff_years > 0], bins=pos,
-                     color="#d62728", alpha=0.85,
-                     label=r"$H\!=\!1$: forward ($d_j\!>\!d_i$)")
-    ax_hist.axvline(0, color="black", lw=1.2, linestyle="--", label="$t=0$")
-    ax_hist.set_xlabel(r"$(d_j - d_i)$ in years", fontsize=8)
-    ax_hist.set_ylabel("Arc count", fontsize=8)
-    ax_hist.set_title(
-        "(A) Date Difference Distribution\n"
-        r"$g_\mathrm{date}(x)=\sum_{i,j}H(d_j\!-\!d_i)x_{ij}$  (Eq. 7)", fontsize=9)
-    ax_hist.legend(fontsize=7)
-    ax_hist.text(0.97, 0.97,
-                 f"Forward arcs: {pct_fwd:.1f}%\n($n={n_fwd:,}$ / {len(diff_years):,})",
-                 transform=ax_hist.transAxes, ha="right", va="top", fontsize=8,
-                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#AAA"))
-
-    # Panel B: step function H(y)
-    y    = np.linspace(-3, 3, 300)
-    H_y  = np.where(y > 0, 1, 0)
-    ax_hfunc.step(y, H_y, color="#333333", lw=1.5, where="post")
-    ax_hfunc.fill_between(y, 0, H_y, step="post", alpha=0.15, color="#d62728",
-                           label=r"$H\!=\!1$ (forward, penalized)")
-    ax_hfunc.fill_between(y, 0, 1 - H_y, step="post", alpha=0.15, color="#1f77b4",
-                           label=r"$H\!=\!0$ (valid arc)")
-    ax_hfunc.axvline(0, color="black", lw=1.0, linestyle="--")
-    ax_hfunc.set_xlabel(r"$y = d_j - d_i$", fontsize=9)
-    ax_hfunc.set_ylabel(r"$H(y)$", fontsize=9)
-    ax_hfunc.set_ylim(-0.1, 1.25); ax_hfunc.set_yticks([0, 1])
-    ax_hfunc.set_title(
-        r"(B) Unit Step Function $H(y)$  (Eq. 8)" + "\n"
-        r"$H(y)=0\ \mathrm{if}\ y\leq0$,  $\theta_\mathrm{date}=-10^{10}$", fontsize=9)
-    ax_hfunc.legend(fontsize=7)
-
-    # Panel C: cumulative citation age gap
-    yr_fwd = np.sort(diff_years[diff_years > 0])
-    yr_bkw = np.sort(-diff_years[diff_years <= 0])
-    if len(yr_fwd) > 1:
-        ax_cumul.plot(yr_fwd, np.arange(1, len(yr_fwd) + 1) / len(yr_fwd),
-                      color="#d62728", lw=1.3, label="Forward arcs CDF")
-    if len(yr_bkw) > 1:
-        ax_cumul.plot(yr_bkw, np.arange(1, len(yr_bkw) + 1) / len(yr_bkw),
-                      color="#1f77b4", lw=1.3, label=r"$|$backward$|$ arcs CDF")
-    ax_cumul.set_xlabel("Citation age gap |years|", fontsize=8)
-    ax_cumul.set_ylabel("Cumulative fraction", fontsize=8)
-    ax_cumul.set_title(
-        "(C) Citation Age Gap CDF\n(backward = expected; forward = anomaly)", fontsize=9)
-    ax_cumul.legend(fontsize=7)
-
-    fig.suptitle(
-        r"Date Guard Statistic -- $g_\mathrm{date}(x)=\sum_{i,j}H(d_j\!-\!d_i)x_{ij}$"
-        r"  with $\theta_\mathrm{date}=-10^{10}$  (Eqs. 7-8)",
-        fontsize=10, fontweight="bold")
+    # Hist
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    lo   = max(diff_years.min(), -30)
+    hi   = min(diff_years.max(),  30)
+    bins = np.linspace(lo, hi, 55)
+    neg_bins = bins[bins <= 0]
+    pos_bins = bins[bins > 0]
+    if len(neg_bins) >= 2:
+        ax.hist(diff_years[diff_years <= 0], bins=neg_bins,
+                color="#1f77b4", alpha=0.85, label="H=0 (valid)")
+    if len(pos_bins) >= 2:
+        ax.hist(diff_years[diff_years > 0], bins=pos_bins,
+                color="#d62728", alpha=0.85, label="H=1 (forward)")
+    ax.axvline(0, color="black", linestyle="--")
+    ax.set_xlabel("(d_j - d_i) in years")
+    ax.set_ylabel("Arc count")
+    ax.set_title("Date Difference Distribution [Eq.7]", fontweight="bold")
+    ax.legend()
     fig.tight_layout()
-    fig.savefig(out_path)
+    p = out_dir / "fig7a_date_diff_hist.png"
+    fig.savefig(p)
     plt.close(fig)
-    print(f"  [Fig7] -> {out_path}")
+    print(f"  [Fig7a] -> {p}")
 
+    # Step function
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    y  = np.linspace(-3, 3, 300)
+    Hy = np.where(y > 0, 1, 0).astype(float)
+    ax.step(y, Hy, color="black", lw=1.8, where="post")
+    ax.fill_between(y, 0, Hy,    step="post", alpha=0.2, color="#d62728",
+                    label="H=1 (forward, penalised)")
+    ax.fill_between(y, 0, 1-Hy, step="post", alpha=0.2, color="#1f77b4",
+                    label="H=0 (valid arc)")
+    ax.set_xlabel("y = d_j - d_i")
+    ax.set_ylabel("H(y)")
+    ax.set_ylim(-0.1, 1.35)
+    ax.set_yticks([0, 1])
+    ax.set_title("Unit-Step Gate Function H(y) [Eq.8]", fontweight="bold")
+    ax.legend()
+    fig.tight_layout()
+    p = out_dir / "fig7b_date_step_func.png"
+    fig.savefig(p)
+    plt.close(fig)
+    print(f"  [Fig7b] -> {p}")
 
-# ---------------------------------------------------------------------------
-# CSV export
-# ---------------------------------------------------------------------------
-def export_csv(
-    G: nx.Graph,
-    arcs: list,
-    edges: list,
-    attrs: pd.DataFrame,
-    out_path: Path,
-) -> None:
-    node_class  = {i: G.nodes[i].get("primary_class", "Unknown") for i in G.nodes()}
-    cls_present = [c for c in ALL_CLASSES if c in set(node_class.values())]
-    g_s      = eq4_sender_effect(arcs, node_class)
-    g_r      = eq5_receiver_effect(arcs, node_class)
-    homo_mat = eq6_homophily(edges, node_class, cls_present)
-    degs     = degree_arrays(G)
-    bc       = eq11_betweenness(G, k=300)
-    bc_arr   = np.array([bc.get(i, 0.0) for i in range(len(degs))])
+    # CDF
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    yr_fwd  = np.sort(diff_years[diff_years > 0])
+    yr_bkwd = np.sort(-diff_years[diff_years <= 0])
+    if len(yr_fwd) > 1:
+        ax.plot(yr_fwd,  np.arange(1, len(yr_fwd)+1)  / len(yr_fwd),
+                color="#d62728", lw=1.5, label="Forward arcs")
+    if len(yr_bkwd) > 1:
+        ax.plot(yr_bkwd, np.arange(1, len(yr_bkwd)+1) / len(yr_bkwd),
+                color="#1f77b4", lw=1.5, label="|Backward| arcs")
+    ax.set_xlabel("Citation age gap |years|")
+    ax.set_ylabel("Cumulative fraction")
+    ax.set_title("Citation Age Gap CDF", fontweight="bold")
+    ax.legend()
+    fig.tight_layout()
+    p = out_dir / "fig7c_date_diff_cdf.png"
+    fig.savefig(p)
+    plt.close(fig)
+    print(f"  [Fig7c] -> {p}")
 
-    rows = [
-        {"statistic": "g_L (Eq.2)",             "value": eq2_arc_stat(arcs),          "equation": "2"},
-        {"statistic": "g_homo sum (Eq.6)",       "value": int(np.trace(homo_mat)),     "equation": "6"},
-        {"statistic": "Transitivity T (Eq.9)",   "value": eq9_transitivity(G),         "equation": "9"},
-        {"statistic": "Density D (Eq.10)",       "value": eq10_density(G),             "equation": "10"},
-        {"statistic": "N nodes",                 "value": G.number_of_nodes(),         "equation": "-"},
-        {"statistic": "M edges (undirected)",    "value": G.number_of_edges(),         "equation": "-"},
-        {"statistic": "mean degree",             "value": float(degs.mean()),          "equation": "-"},
-        {"statistic": "max degree",              "value": int(degs.max()),             "equation": "-"},
-        {"statistic": "mean betweenness (Eq.11)","value": float(bc_arr.mean()),        "equation": "11"},
-        {"statistic": "GWIDegree (alpha=2)",     "value": gw_idegree(G, 2.0),         "equation": "Snijders"},
-        {"statistic": "GWESP (alpha=2)",         "value": gw_esp(G, 2.0),             "equation": "Snijders"},
-    ]
-    for c in cls_present:
-        rows.append({"statistic": f"g_send[{c}] (Eq.4)", "value": g_s.get(c, 0), "equation": "4"})
-        rows.append({"statistic": f"g_rec[{c}] (Eq.5)",  "value": g_r.get(c, 0), "equation": "5"})
+# ─────────────────────────────────────────────────────────────────────
+# Fig 8 — ERGM coefficients forest plot
+# ─────────────────────────────────────────────────────────────────────
+def fig8_ergm_coefficients(out_dir: Path, ergm_csv_path: Path = None) -> None:
+    """
+    APS-style forest plot of ERGM theta coefficients with 95% CI error bars.
 
-    pd.DataFrame(rows).to_csv(out_path, index=False)
-    print(f"  [CSV]  -> {out_path}")
+    If ergm_csv_path points to an existing CSV (columns: group, label, estimate,
+    std_error), real estimates are plotted.  Otherwise a watermarked dummy is
+    produced so the file is clearly not publishable without actual MCMC output.
+    """
+    is_dummy = False
 
+    if ergm_csv_path is not None and Path(ergm_csv_path).exists():
+        df = pd.read_csv(ergm_csv_path)
+        required = {"group", "label", "estimate", "std_error"}
+        if not required.issubset(df.columns):
+            print(f"  WARNING: {ergm_csv_path} missing columns {required - set(df.columns)}; "
+                  "falling back to dummy data.", file=sys.stderr)
+            is_dummy = True
+        else:
+            ergm_data = defaultdict(list)
+            for _, row in df.iterrows():
+                ergm_data[row["group"]].append(
+                    (str(row["label"]), float(row["estimate"]), float(row["std_error"])))
+            ergm_data = dict(ergm_data)
+    else:
+        is_dummy = True
 
-# ---------------------------------------------------------------------------
+    if is_dummy:
+        ergm_data = {
+            "Network Structures": [
+                ("Arc Count (Eq.2 analog)",                   -3.20, 0.12),
+                ("Triangles / Transitivity (AltKTriT proxy)", +0.85, 0.09),
+                ("GWIDegree alpha=log(2) (AltInStars)",       +0.62, 0.11),
+            ],
+            "Homophily (D-Class)": [
+                ("Same Primary D-Class (Eq.6)",               +1.47, 0.08),
+            ],
+        }
+
+    # Build flat ordered lists
+    group_labels, labels, estimates, errors, group_ids = [], [], [], [], []
+    group_order = list(ergm_data.keys())
+    for gid, grp in enumerate(group_order):
+        for lbl, est, se in ergm_data[grp]:
+            group_labels.append(grp)
+            labels.append(lbl)
+            estimates.append(est)
+            errors.append(se * 1.96)  # 95% CI half-width
+            group_ids.append(gid)
+
+    n = len(labels)
+    y_pos = list(range(n - 1, -1, -1))  # top-to-bottom
+
+    # Group separator positions (first index of each group, reversed)
+    group_starts = {}
+    for i, grp in enumerate(group_labels):
+        if grp not in group_starts:
+            group_starts[grp] = y_pos[i]
+
+    GROUP_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd"]
+
+    fig, ax = plt.subplots(figsize=(9, max(4, n * 0.65 + 1.5)))
+
+    for i, (y, est, err, gid) in enumerate(zip(y_pos, estimates, errors, group_ids)):
+        color = GROUP_COLORS[gid % len(GROUP_COLORS)]
+        ax.errorbar(est, y, xerr=err,
+                    fmt="o", color=color, ms=7,
+                    ecolor=color, elinewidth=1.6, capsize=4, capthick=1.6,
+                    zorder=3)
+
+    ax.axvline(0, color="#555555", lw=1.0, ls="--", zorder=2)
+
+    # Y-axis labels
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(labels, fontsize=9)
+
+    # Group header lines
+    group_patch = []
+    for gid, grp in enumerate(group_order):
+        color = GROUP_COLORS[gid % len(GROUP_COLORS)]
+        group_patch.append(mpatches.Patch(color=color, label=grp))
+
+    # Bracket lines for groups
+    for gid, grp in enumerate(group_order):
+        rows = [y_pos[i] for i, g in enumerate(group_labels) if g == grp]
+        color = GROUP_COLORS[gid % len(GROUP_COLORS)]
+        ax.barh(rows, [0] * len(rows), left=ax.get_xlim()[0],
+                height=0.7, color=color, alpha=0.08, zorder=1)
+
+    ax.legend(handles=group_patch, loc="lower right", fontsize=9, framealpha=0.88)
+    ax.set_xlabel("ERGM coefficient theta  (mean +/- 1.96 SE)", fontsize=10)
+    ax.set_title("ERGM Parameter Estimates — Chakraborty et al. (2020) Framework",
+                 fontsize=11, fontweight="bold")
+    ax.set_ylim(-0.8, n - 0.2)
+
+    if is_dummy:
+        fig.text(0.5, 0.5,
+                 "ILLUSTRATIVE DATA\nREQUIRES ACTUAL MCMC ESTIMATION",
+                 fontsize=16, color="gray", alpha=0.35,
+                 ha="center", va="center", rotation=28,
+                 transform=fig.transFigure,
+                 fontweight="bold")
+
+    fig.tight_layout()
+    p = out_dir / "fig8_ergm_coefficients.pdf"
+    fig.savefig(p, format="pdf", bbox_inches="tight")
+    plt.close(fig)
+    status = "(DUMMY — watermarked)" if is_dummy else "(real estimates)"
+    print(f"  [Fig8] {status} -> {p}")
+
+# ─────────────────────────────────────────────────────────────────────
 # Main
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Visualize USPTO design patent co-citation network\n"
-            "implementing all equations from Chakraborty et al. (2020)"
-        )
-    )
-    parser.add_argument("--ergm-dir", default="ergm_input",
-                        help="build_ergm_input.py output directory (default: ergm_input)")
-    parser.add_argument("--out-dir",  default="output",
-                        help="Output directory (default: output)")
-    parser.add_argument("--top-n",   type=int, default=300,
-                        help="Top-N nodes by degree for topology figure (default: 300)")
-    parser.add_argument("--bc-k",    type=int, default=500,
-                        help="Betweenness approximation sample size -- Eq.(11) (default: 500)")
-    parser.add_argument("--no-fig1", action="store_true",
-                        help="Skip fig1 (network topology)")
-    parser.add_argument("--no-fig6", action="store_true",
-                        help="Skip fig6 (GW statistics -- slow for large graphs)")
+    parser = argparse.ArgumentParser(description="USPTO design patent ERGM Visualizer v4")
+    parser.add_argument("--ergm-dir",      default="ergm_input")
+    parser.add_argument("--out-dir",       default="output")
+    parser.add_argument("--top-n",         type=int, default=300)
+    parser.add_argument("--bc-k",          type=int, default=500)
+    parser.add_argument("--no-fig1",       action="store_true")
+    parser.add_argument("--no-fig6",       action="store_true")
+    # MCMC estimation flags
+    parser.add_argument("--estimate-ergm", action="store_true",
+                        help="Run Robbins-Monro MCMLE and save ergm_results.csv")
+    parser.add_argument("--ergm-csv",      default=None,
+                        help="Path to existing ergm_results CSV for fig8")
+    parser.add_argument("--ergm-subgraph", type=int, default=500,
+                        help="Top-degree nodes for ERGM subgraph (default 500)")
+    parser.add_argument("--ergm-outer",    type=int, default=40,
+                        help="Robbins-Monro outer iterations (default 40)")
+    parser.add_argument("--ergm-mcmc",     type=int, default=300,
+                        help="MCMC samples per outer iteration (default 300)")
     args = parser.parse_args()
 
     ergm_dir = Path(args.ergm_dir)
@@ -1072,47 +1028,59 @@ def main() -> None:
     attr_path = ergm_dir / "attributes.txt"
     arc_path  = ergm_dir / "arc_list.txt"
     if not attr_path.exists() or not arc_path.exists():
-        print(f"ERROR: {attr_path} or {arc_path} not found.", file=sys.stderr)
+        print(f"ERROR: Files not found in {ergm_dir}", file=sys.stderr)
         sys.exit(1)
 
-    print("Loading attributes...")
+    print("Loading data...")
     attrs = load_attrs(attr_path)
-    print(f"  {len(attrs):,} nodes")
-
-    print("Loading arc list...")
     arcs  = load_arc_list(arc_path)
     edges = arcs_to_undirected(arcs)
-    print(f"  {len(arcs):,} arcs -> {len(edges):,} undirected edges")
+    print(f"  {len(attrs):,} nodes,  {len(arcs):,} arcs  ->  {len(edges):,} undirected edges")
 
-    G = build_networkx(len(attrs), edges)
+    G = build_graph(len(attrs), edges)
     attach_attrs(G, attrs)
 
-    print("\nGenerating figures...")
+    # Optionally run MCMC ERGM estimation
+    ergm_csv_path = Path(args.ergm_csv) if args.ergm_csv else None
 
+    if args.estimate_ergm:
+        print("\nRunning Robbins-Monro MCMLE ERGM estimation...")
+        node_class_dict = {i: G.nodes[i].get("primary_class", "") for i in G.nodes()}
+        ergm_df = estimate_ergm_mcmc(
+            G,
+            node_class_dict,
+            subgraph_size=args.ergm_subgraph,
+            n_outer=args.ergm_outer,
+            n_mcmc=args.ergm_mcmc,
+        )
+        csv_out = out_dir / "ergm_results.csv"
+        ergm_df.to_csv(csv_out, index=False)
+        print(f"  [ERGM CSV] -> {csv_out}")
+        print(ergm_df.to_string(index=False))
+        ergm_csv_path = csv_out
+
+    print("\nGenerating separated figures and LaTeX tables...")
     if not args.no_fig1:
         fig1_network_topology(G, out_dir / "fig1_network_topology.png", args.top_n)
 
-    fig2_ergm_statistics(G, arcs, edges, attrs, out_dir / "fig2_ergm_statistics.png")
-    fig3_degree_distribution(G, out_dir / "fig3_degree_distribution.png", args.bc_k)
-    fig4_homophily_heatmap(G, edges, out_dir / "fig4_homophily_heatmap.png")
-    fig5_sender_receiver(G, arcs, out_dir / "fig5_sender_receiver.png")
+    fig2_ergm_statistics(G, arcs, edges, attrs, out_dir)
+    fig3_degree_distribution(G, out_dir, args.bc_k)
+    fig4_homophily_heatmap(G, edges, out_dir)
+    fig5_sender_receiver(G, arcs, out_dir)
 
     if not args.no_fig6:
-        fig6_gw_statistics(G, out_dir / "fig6_gw_statistics.png")
+        fig6_gw_statistics(G, out_dir)
 
-    fig7_date_guard(G, arcs, attrs, out_dir / "fig7_date_guard.png")
-    export_csv(G, arcs, edges, attrs, out_dir / "ergm_statistics.csv")
+    fig7_date_guard(G, arcs, attrs, out_dir)
+    fig8_ergm_coefficients(out_dir, ergm_csv_path)
 
-    print(f"\nDone. Output -> {out_dir}/")
-    print("  fig1_network_topology.png   Eq.(9)(10)  network layout + metrics")
-    print("  fig2_ergm_statistics.png    Eq.(1-8)    all ERGM statistics")
-    print("  fig3_degree_distribution.png Eq.(10)(11) degree + betweenness CCDF")
-    print("  fig4_homophily_heatmap.png  Eq.(6)      delta(a_i,a_j) 35x35 matrix")
-    print("  fig5_sender_receiver.png    Eq.(4)(5)   per-class sender/receiver")
-    print("  fig6_gw_statistics.png      GWIDeg / GWODeg / GWESP / GWDSP")
-    print("  fig7_date_guard.png         Eq.(7)(8)   temporal citation bias")
-    print("  ergm_statistics.csv         all computed statistics")
+    print(f"\nDone. All outputs generated in '{out_dir}/'")
 
 
 if __name__ == "__main__":
+    # Usage:
+    #   python visualize_ergm_network.py
+    #   python visualize_ergm_network.py --no-fig1 --no-fig6
+    #   python visualize_ergm_network.py --estimate-ergm --ergm-subgraph 300 --ergm-outer 20
+    #   python visualize_ergm_network.py --ergm-csv output/ergm_results.csv
     main()
