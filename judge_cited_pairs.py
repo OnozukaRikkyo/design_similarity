@@ -246,8 +246,6 @@ def process_year(
                                 tqdm.write(f"  [ERROR] 503が{MAX_RETRIES}回続いたため終了します。", file=sys.stderr)
                                 sys.exit(1)
                         else:
-                            import traceback
-                            tqdm.write(traceback.format_exc(), file=sys.stderr)
                             tqdm.write(f"  -> ERROR: {e}", file=sys.stderr)
                             sys.exit(1)
 

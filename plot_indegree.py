@@ -418,7 +418,7 @@ def main() -> None:
     args = parser.parse_args()
 
     years = args.years or None
-    years_label = ", ".join(years) if years else "2007–2010"
+    years_label = ", ".join(years) if years else "2007–2022"
 
     print("次数を集計中（無向グラフ）...")
     counter = compute_degrees_undirected(Path(args.edge_dir), years)

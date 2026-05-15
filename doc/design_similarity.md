@@ -328,3 +328,52 @@ with open("results.json", "w", encoding="utf-8") as f:
 | `GEMINI_API_KEY` | ○ | Google AI Studio の API キー |
 
 設定方法は [setup.md](setup.md) を参照。
+
+---
+
+## トラブルシューティング
+
+### CUDA out of memory（Qwen バックエンド）
+
+**症状**
+
+```
+CUDA out of memory. Tried to allocate 8.27 GiB.
+GPU 0 has a total capacity of 23.55 GiB of which 4.51 GiB is free.
+```
+
+モデルのロードは成功するが、推論時（`model.generate()` 実行前後）にビジュアルトークン展開用のメモリが確保できず発生する。`QWEN_MAX_IMAGE_SIZE=1024` の場合、2 枚の画像で追加 ~8 GB のピークが生じる。
+
+**VRAM 使用量の目安（RTX 3090 / 24 GB）**
+
+| 状態 | VRAM 使用量 |
+|------|------------|
+| Qwen3-VL-4B (bfloat16) モデルロード | 約 9 GB |
+| 推論時ピーク（1024px 画像 × 2 枚） | 追加 約 8–9 GB |
+| **1 プロセス合計** | **約 17–18 GB** |
+
+GPU に別の重い Python プロセス（例: `generate_captions_qwen2vl.py`）が同居していると、推論時のピーク確保に失敗する。
+
+**解決手順**
+
+エラーメッセージ中の `Process XXXXX has X GiB memory in use.` に記載されている PID が対象。
+
+1. 占有プロセスを一覧表示する:
+   ```bash
+   nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader
+   ```
+2. 対象 PID をまとめて終了する（複数同時指定可）:
+   ```bash
+   kill -9 <PID1> <PID2> ...
+   ```
+3. 空き VRAM が ~10 GB 以上あることを確認してから再実行する:
+   ```bash
+   nvidia-smi --query-gpu=memory.free,memory.total --format=csv,noheader
+   ```
+
+**複数プロセスで GPU を共有する必要がある場合の代替対処**
+
+| 対処 | 設定箇所 | 効果 |
+|------|---------|------|
+| 画像サイズ削減 | `QWEN_MAX_IMAGE_SIZE = 512` | 推論時ピークメモリを大幅削減 |
+| 4bit 量子化 | `AutoModelForImageTextToText.from_pretrained(..., load_in_4bit=True)` | モデル VRAM を ~9 GB → ~2 GB に削減（要 `bitsandbytes`） |

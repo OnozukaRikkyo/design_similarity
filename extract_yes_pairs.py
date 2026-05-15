@@ -1,36 +1,51 @@
 """
 similarity_results の JSONL から similarity=Yes のレコードを抽出し、
-- debug/yes_json/  : 該当 JSON レコード（1ファイル1レコード）
-- debug/yes_image_pair/ : source + target を横結合した画像
+- /mnt/eightthdd/uspto/yes_pair/{backend}_yes_pairs/{year}.jsonl
+    : 年別 JSONL（特許メタデータ付き・1行1レコード）
+- /mnt/eightthdd/uspto/yes_pair/{backend}_yes_image_pair/
+    : source + target を横結合した画像
 を保存する。
+
+年は source 特許の CSV ファイル名（2007.csv → "2007"）で決定する。
+CSV に存在しない場合は画像パスの /images/{year}/ から補完し、
+それも取れなければ "unknown" に分類する。
 """
 
 import csv
 import json
 import pickle
+import re
 import sys
 import textwrap
+from collections import defaultdict
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
 from image_processor import ImageProcessor
 
+# ─── バックエンド選択（ここを編集して切り替える） ───────────────────────────
+BACKEND = "qwen"   # "gemini" | "qwen"
+# BACKEND = "qwen"   # "gemini" | "qwen"
 
-RESULTS_DIR  = Path("/mnt/eightthdd/uspto/similarity_results")
-CSV_DIR      = Path("/mnt/eightthdd/uspto/data")
-OUT_JSON_DIR = Path("debug/yes_json")
-OUT_IMG_DIR  = Path("debug/yes_image_pair")
-PATENT_INDEX_CACHE = Path("debug/_patent_index.pkl")
+CSV_DIR = Path("/mnt/eightthdd/uspto/data")
+
+RESULTS_DIR = Path("/mnt/eightthdd/uspto/") / (
+    "qwen_similarity_results" if BACKEND == "qwen" else "similarity_results"
+)
+_YES_PAIR_BASE     = Path("/mnt/eightthdd/uspto/yes_pair")
+OUT_JSONL_DIR      = _YES_PAIR_BASE / f"{BACKEND}_yes_pairs"
+OUT_IMG_DIR        = _YES_PAIR_BASE / f"{BACKEND}_yes_image_pair"
+PATENT_INDEX_CACHE = _YES_PAIR_BASE / "_patent_index.pkl"
 
 TARGET_H = 400  # 画像の表示高さ（px）
 
 
 # ---------------------------------------------------------------------------
-# 特許属性インデックス（id → {title, class}）
+# 特許属性インデックス（id → {title, class, date, year}）
 # ---------------------------------------------------------------------------
 def build_patent_index(csv_dir: Path, cache_path: Path) -> dict[str, dict]:
-    """全 CSV から {patent_id: {"title": ..., "class": ...}} を構築し pickle キャッシュする。"""
+    """全 CSV から {patent_id: {title, class, date, year}} を構築し pickle キャッシュする。"""
     if cache_path.exists():
         print(f"キャッシュから特許インデックスをロード: {cache_path}", flush=True)
         with open(cache_path, "rb") as f:
@@ -39,6 +54,7 @@ def build_patent_index(csv_dir: Path, cache_path: Path) -> dict[str, dict]:
     print("特許インデックス構築中...", end=" ", flush=True)
     index: dict[str, dict] = {}
     for path in sorted(csv_dir.glob("*.csv")):
+        year = path.stem  # "2007", "2008", ...
         with open(path, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 pid = row.get("id", "").strip()
@@ -46,6 +62,8 @@ def build_patent_index(csv_dir: Path, cache_path: Path) -> dict[str, dict]:
                     index[pid] = {
                         "title": row.get("title", "").strip(),
                         "class": row.get("class", "").strip(),
+                        "date":  row.get("date",  "").strip(),
+                        "year":  year,
                     }
     print(f"{len(index):,} 件")
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -53,6 +71,28 @@ def build_patent_index(csv_dir: Path, cache_path: Path) -> dict[str, dict]:
         pickle.dump(index, f, protocol=pickle.HIGHEST_PROTOCOL)
     print(f"キャッシュ保存: {cache_path}")
     return index
+
+
+def _year_from_images(record: dict) -> str:
+    """画像パスの /images/{year}/ から年を抽出するフォールバック。"""
+    for imgs in (record.get("source_images", {}), record.get("target_images", {})):
+        for path in imgs.values():
+            m = re.search(r"/images/(\d{4})/", path)
+            if m:
+                return m.group(1)
+    return "unknown"
+
+
+def _id_diff(src: str, tgt: str) -> int | None:
+    """
+    意匠特許 ID（例: D0534345）の数値部分の差の絶対値を返す。
+    パース失敗時は None。
+    連番（diff=1）の場合、同一出願人が同日に連続登録した設計バリアントの可能性が高い。
+    """
+    try:
+        return abs(int(src.lstrip("D")) - int(tgt.lstrip("D")))
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -93,41 +133,32 @@ def concat_images(
     total_w = img_a.width + gap + img_b.width
     line_h  = 16
 
-    # 上部ヘッダー: タイトル + 分類（各2行）
-    header_h = line_h * 2 + padding
-
-    # 下部テキスト: confidence + reason
+    header_h    = line_h * 2 + padding
     wrap_chars  = max(40, (total_w - padding * 2) // 7)
     reason_lines = textwrap.wrap(reason, width=wrap_chars) if reason else []
-    footer_h = line_h + line_h * len(reason_lines) + padding if (confidence or reason) else 0
+    footer_h    = line_h + line_h * len(reason_lines) + padding if (confidence or reason) else 0
 
     total_h = header_h + img_h + footer_h
     canvas  = Image.new("RGB", (total_w, total_h), color=(245, 245, 245))
     draw    = ImageDraw.Draw(canvas)
 
-    # --- 上部ヘッダー描画 ---
-    # source 側（左）
     src_title = textwrap.shorten(src_info.get("title", ""), width=40, placeholder="…")
     src_class = src_info.get("class", "")
-    draw.text((padding, padding),           src_title, fill=(20, 20, 120),  font=font_header)
-    draw.text((padding, padding + line_h),  src_class, fill=(80, 80, 80),   font=font_sub)
+    draw.text((padding, padding),          src_title, fill=(20, 20, 120), font=font_header)
+    draw.text((padding, padding + line_h), src_class, fill=(80, 80, 80),  font=font_sub)
 
-    # target 側（右）
     tgt_x     = img_a.width + gap
     tgt_title = textwrap.shorten(tgt_info.get("title", ""), width=40, placeholder="…")
     tgt_class = tgt_info.get("class", "")
-    draw.text((tgt_x + padding, padding),           tgt_title, fill=(20, 20, 120),  font=font_header)
-    draw.text((tgt_x + padding, padding + line_h),  tgt_class, fill=(80, 80, 80),   font=font_sub)
+    draw.text((tgt_x + padding, padding),          tgt_title, fill=(20, 20, 120), font=font_header)
+    draw.text((tgt_x + padding, padding + line_h), tgt_class, fill=(80, 80, 80),  font=font_sub)
 
-    # 仕切り線
     draw.line([(tgt_x - gap // 2, 0), (tgt_x - gap // 2, total_h)], fill=(200, 200, 200), width=1)
 
-    # --- 画像貼り付け ---
     y_img = header_h
-    canvas.paste(img_a, (0,        y_img + (img_h - img_a.height) // 2))
-    canvas.paste(img_b, (tgt_x,    y_img + (img_h - img_b.height) // 2))
+    canvas.paste(img_a, (0,     y_img + (img_h - img_a.height) // 2))
+    canvas.paste(img_b, (tgt_x, y_img + (img_h - img_b.height) // 2))
 
-    # --- 下部フッター描画 ---
     if confidence or reason:
         y = y_img + img_h + padding // 2
         draw.text((padding, y), f"confidence: {confidence}", fill=(0, 100, 0), font=font_conf)
@@ -140,14 +171,28 @@ def concat_images(
 
 
 # ---------------------------------------------------------------------------
-# JSONL 処理
+# JSONL 処理（年別バケットに振り分け）
 # ---------------------------------------------------------------------------
 def process_file(
     jsonl_path: Path,
-    json_out: Path,
+    jsonl_out_dir: Path,
     img_out: Path,
     patent_index: dict[str, dict],
 ) -> tuple[int, int]:
+    """
+    jsonl_path の全レコードを走査し、similarity=Yes のものを
+    年別 JSONL と画像ペアとして保存する。
+
+    JSONL レコード形式:
+      source, target,
+      source_title, source_class, source_date,
+      target_title, target_class, target_date,
+      source_images, target_images, events,
+      image_type_used, similarity, confidence, reason
+    """
+    # 年 → レコードリスト のバッファ（ファイルを一括オープンしないため）
+    buckets: dict[str, list[str]] = defaultdict(list)
+
     found = skipped = 0
     with open(jsonl_path, encoding="utf-8") as f:
         for lineno, line in enumerate(f, 1):
@@ -166,20 +211,39 @@ def process_file(
             found += 1
             src = rec["source"]
             tgt = rec["target"]
-            stem = f"{src}__{tgt}"
 
-            # JSON 保存
-            (json_out / f"{stem}.json").write_text(
-                json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            src_meta = patent_index.get(src, {})
+            tgt_meta = patent_index.get(tgt, {})
+            year     = src_meta.get("year") or _year_from_images(rec)
 
-            # 画像パス取得
+            # 出力レコード（CSV メタデータを付加）
+            out_rec = {
+                "source":       src,
+                "target":       tgt,
+                "id_diff":      _id_diff(src, tgt),
+                "source_title": src_meta.get("title", ""),
+                "source_class": src_meta.get("class", ""),
+                "source_date":  src_meta.get("date",  ""),
+                "target_title": tgt_meta.get("title", ""),
+                "target_class": tgt_meta.get("class", ""),
+                "target_date":  tgt_meta.get("date",  ""),
+                "source_images":   rec.get("source_images", {}),
+                "target_images":   rec.get("target_images", {}),
+                "events":          rec.get("events", []),
+                "image_type_used": rec.get("image_type_used", ""),
+                "similarity":      rec["similarity"],
+                "confidence":      rec.get("confidence", ""),
+                "reason":          rec.get("reason", ""),
+            }
+            buckets[year].append(json.dumps(out_rec, ensure_ascii=False))
+
+            # 画像ペア保存
             img_type = rec.get("image_type_used", "perspective")
             src_path = rec.get("source_images", {}).get(img_type)
             tgt_path = rec.get("target_images", {}).get(img_type)
 
             if not src_path or not tgt_path:
-                print(f"  [WARN] 画像パス不明: {stem}", file=sys.stderr)
+                print(f"  [WARN] 画像パス不明: {src}__{tgt}", file=sys.stderr)
                 skipped += 1
                 continue
 
@@ -191,12 +255,18 @@ def process_file(
 
             pair_img = concat_images(
                 img_a, img_b,
-                src_info=patent_index.get(src, {}),
-                tgt_info=patent_index.get(tgt, {}),
+                src_info=src_meta,
+                tgt_info=tgt_meta,
                 confidence=rec.get("confidence", ""),
                 reason=rec.get("reason", ""),
             )
-            pair_img.save(img_out / f"{stem}.png")
+            pair_img.save(img_out / f"{src}__{tgt}.png")
+
+    # 年別 JSONL に追記
+    for year, lines in sorted(buckets.items()):
+        out_path = jsonl_out_dir / f"{year}.jsonl"
+        with open(out_path, "a", encoding="utf-8") as fout:
+            fout.write("\n".join(lines) + "\n")
 
     return found, skipped
 
@@ -205,7 +275,7 @@ def process_file(
 # メイン
 # ---------------------------------------------------------------------------
 def main():
-    OUT_JSON_DIR.mkdir(parents=True, exist_ok=True)
+    OUT_JSONL_DIR.mkdir(parents=True, exist_ok=True)
     OUT_IMG_DIR.mkdir(parents=True, exist_ok=True)
 
     patent_index = build_patent_index(CSV_DIR, PATENT_INDEX_CACHE)
@@ -218,13 +288,21 @@ def main():
     total_found = total_skipped = 0
     for path in jsonl_files:
         print(f"処理中: {path.name}")
-        found, skipped = process_file(path, OUT_JSON_DIR, OUT_IMG_DIR, patent_index)
+        found, skipped = process_file(path, OUT_JSONL_DIR, OUT_IMG_DIR, patent_index)
         print(f"  → similarity=Yes: {found}件  (画像スキップ: {skipped}件)")
         total_found += found
         total_skipped += skipped
 
+    # 年別の件数サマリ
+    jsonl_files_out = sorted(OUT_JSONL_DIR.glob("*.jsonl"))
+    if jsonl_files_out:
+        print("\n年別 JSONL:")
+        for p in jsonl_files_out:
+            n = sum(1 for _ in open(p, encoding="utf-8") if _.strip())
+            print(f"  {p.name}: {n}件")
+
     print(f"\n完了: 合計 {total_found} 件の Yes レコード ({total_skipped} 件は画像スキップ)")
-    print(f"  JSON  → {OUT_JSON_DIR.resolve()}")
+    print(f"  JSONL → {OUT_JSONL_DIR.resolve()}")
     print(f"  画像  → {OUT_IMG_DIR.resolve()}")
 
 

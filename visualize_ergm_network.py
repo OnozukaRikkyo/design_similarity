@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-USPTO Design Patent Co-citation Network Visualizer  v4
-=======================================================
-* All figures are exported as single panels (1 plot per file).
-* Tables are exported as LaTeX (.tex) files.
-* Figure 1 uses Kamada-Kawai layout and hollow nodes.
-* Figure 8 shows ERGM coefficients read from a CSV (or watermarked dummy).
-* --estimate-ergm runs Robbins-Monro MCMLE and writes ergm_results.csv.
+USPTO Design Patent Similarity — Class Heatmap Visualizer
+==========================================================
+yes_pair/qwen 以下の *.jsonl を再帰的に読み込み、
+クラス間引用頻度ヒートマップ（Figure E）を生成する。
 """
 
 import argparse
+import json
 import math
+import re
 import sys
 import time
 from collections import defaultdict
@@ -29,6 +28,18 @@ import networkx as nx
 # ─────────────────────────────────────────────────────────────────────
 FIG_SIZE = (7, 6)
 FIG_DPI  = 300
+
+LOCARNO_NAMES = {
+    "D01": "Foodstuffs",   "D02": "Clothing",     "D03": "Travel Goods",
+    "D04": "Brushware",    "D05": "Textiles",      "D06": "Furnishings",
+    "D07": "Household",    "D08": "Tools",         "D09": "Packaging",
+    "D10": "Clocks",       "D11": "Jewelry",       "D12": "Vehicles",
+    "D13": "Equipment",    "D14": "Recording",     "D15": "Machines",
+    "D16": "Photography",  "D19": "Office",        "D21": "Games",
+    "D23": "Fluid Dist.",  "D24": "Medical",       "D26": "Lighting",
+    "D28": "Pharma.",      "D29": "Fire Safety",   "D30": "Animals",
+    "D31": "Food/Drink",   "D32": "Graphics",      "D34": "Telecom",
+}
 
 ALL_CLASSES = [f"D{i}" for i in range(1, 35)] + ["D99"]
 CLASS_NAMES = {
@@ -119,6 +130,174 @@ def build_graph(n_nodes: int, edges: list) -> nx.Graph:
     G.add_nodes_from(range(n_nodes))
     G.add_edges_from(edges)
     return G
+
+def parse_primary_class(class_str: str) -> str:
+    m = re.match(r'D\s*(\d+)', str(class_str).strip())
+    if not m:
+        return "Unknown"
+    digits = m.group(1)
+    for length in [2, 1]:
+        if len(digits) >= length:
+            n = int(digits[:length])
+            if (1 <= n <= 34) or n == 99:
+                return f"D{n}"
+    return "Unknown"
+
+
+def load_jsonl_graph(root: Path) -> nx.Graph:
+    """JSONLファイルを再帰的に読み込み、source-targetをエッジとしてグラフを構築する。"""
+    G = nx.Graph()
+    total_files = 0
+    total_edges = 0
+
+    for jsonl_path in sorted(root.rglob("*.jsonl")):
+        total_files += 1
+        print(f"  Loading {jsonl_path.relative_to(root)} ...")
+        with open(jsonl_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                src = rec.get("source", "")
+                tgt = rec.get("target", "")
+                if not src or not tgt or src == tgt:
+                    continue
+
+                for node, cls_key, date_key in [
+                    (src, "source_class", "source_date"),
+                    (tgt, "target_class", "target_date"),
+                ]:
+                    if node not in G:
+                        G.add_node(
+                            node,
+                            primary_class=parse_primary_class(rec.get(cls_key, "")),
+                            date=str(rec.get(date_key, "")),
+                        )
+
+                G.add_edge(src, tgt)
+                total_edges += 1
+
+    print(f"  Loaded {total_files} files → |V|={G.number_of_nodes():,}, |E|={G.number_of_edges():,}")
+    return G
+
+
+def parse_class_padded(raw: str) -> str:
+    """'D14 38' → 'D14',  'D 6 480' → 'D06'  (ゼロ埋め2桁)"""
+    m = re.match(r"D\s*0*(\d+)", str(raw).strip(), re.I)
+    return f"D{int(m.group(1)):02d}" if m else "D??"
+
+
+def load_class_pairs(root: Path) -> tuple[defaultdict, defaultdict]:
+    """JSONLを再帰的に読み込み、クラスペア件数と全クラス件数を返す。"""
+    class_pair_cnt = defaultdict(int)
+    all_cls_cnt    = defaultdict(int)
+    total_files = 0
+
+    for jsonl_path in sorted(root.rglob("*.jsonl")):
+        total_files += 1
+        print(f"  Loading {jsonl_path.relative_to(root)} ...")
+        with open(jsonl_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                sc = parse_class_padded(rec.get("source_class", ""))
+                tc = parse_class_padded(rec.get("target_class", ""))
+                if sc == "D??" or tc == "D??":
+                    continue
+                class_pair_cnt[(sc, tc)] += 1
+                all_cls_cnt[sc] += 1
+                all_cls_cnt[tc] += 1
+
+    print(f"  Loaded {total_files} files → {sum(class_pair_cnt.values()):,} pairs")
+    return class_pair_cnt, all_cls_cnt
+
+
+def fig_class_heatmap(
+    class_pair_cnt: defaultdict,
+    all_cls_cnt: defaultdict,
+    out_path: Path,
+    top_n: int = 14,
+) -> None:
+    top_cls = [c for c, _ in sorted(all_cls_cnt.items(), key=lambda x: -x[1])][:top_n]
+
+    mat     = np.array([[class_pair_cnt[(r, c)] for c in top_cls]
+                        for r in top_cls], dtype=float)
+    log_mat = np.log1p(mat)
+
+    diag_sum      = sum(class_pair_cnt[(c, c)] for c in top_cls)
+    total_in_mat  = mat.sum()
+    within_ratio  = diag_sum / total_in_mat * 100 if total_in_mat > 0 else 0
+    print(f"  Within-class: {diag_sum:,}  ({within_ratio:.1f}%)")
+    print(f"  Cross-class : {int(total_in_mat - diag_sum):,}  ({100 - within_ratio:.1f}%)")
+
+    matplotlib.rcParams.update({
+        "font.family":   "serif",
+        "font.serif":    ["Times New Roman", "DejaVu Serif"],
+        "font.size":     10,
+        "axes.titlesize": 10,
+        "axes.labelsize": 10,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
+        "figure.dpi":    300,
+        "pdf.fonttype":  42,
+        "ps.fonttype":   42,
+        "axes.grid":     False,
+    })
+
+    fig, ax = plt.subplots(figsize=(8.5, 7.5))
+
+    im = ax.imshow(log_mat, cmap="YlOrRd", aspect="equal", origin="upper",
+                   vmin=0, vmax=log_mat.max())
+
+    for i in range(len(top_cls)):
+        ax.add_patch(plt.Rectangle(
+            (i - 0.5, i - 0.5), 1, 1,
+            fill=False, edgecolor="#1a5e63", linewidth=2.2, zorder=4,
+        ))
+
+    threshold = mat.max() * 0.04
+    for i, r in enumerate(top_cls):
+        for j, c in enumerate(top_cls):
+            v = int(mat[i, j])
+            if v >= threshold:
+                txt_color = "white" if log_mat[i, j] > log_mat.max() * 0.60 else "#333333"
+                ax.text(j, i, f"{v:,}",
+                        ha="center", va="center",
+                        fontsize=7.0, color=txt_color, fontweight="bold", zorder=5)
+
+    x_labels = [f"{c}\n{LOCARNO_NAMES.get(c, '')}" for c in top_cls]
+    ax.set_xticks(range(len(top_cls)))
+    ax.set_xticklabels(x_labels, fontsize=8.8, ha="center")
+    ax.set_yticks(range(len(top_cls)))
+    ax.set_yticklabels(x_labels, fontsize=8.8)
+    ax.set_xlabel("Target class (cited patent)",  fontsize=10, labelpad=8)
+    ax.set_ylabel("Source class (citing patent)", fontsize=10, labelpad=8)
+    ax.tick_params(which="both", length=0)
+    for sp in ax.spines.values():
+        sp.set_linewidth(0.5)
+
+    cbar = plt.colorbar(im, ax=ax, pad=0.015, shrink=0.82, aspect=22)
+    cbar.set_label("log(citation count + 1)", fontsize=9.5)
+    cbar.ax.tick_params(labelsize=8.5)
+    max_count = int(mat.max())
+    cbar.ax.text(2.8, log_mat.max(), f"(max = {max_count:,})",
+                 ha="left", va="top", fontsize=7.5,
+                 color="#555555", transform=cbar.ax.transData)
+
+    ax.set_title(
+        "Figure E.  Cross-class citation frequency matrix  (log scale)\n"
+        f"(Teal border = within-class;  within-class share = {within_ratio:.1f}%)",
+        fontsize=9.5, pad=10, color="#1a1a2e",
+    )
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=FIG_DPI, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"  [FigE] -> {out_path}")
+
 
 def attach_attrs(G: nx.Graph, attrs: pd.DataFrame) -> None:
     for i in G.nodes():
@@ -405,26 +584,33 @@ def estimate_ergm_mcmc(
 # ─────────────────────────────────────────────────────────────────────
 # Fig 1 — Network topology (Physics Insight, Kamada-Kawai)
 # ─────────────────────────────────────────────────────────────────────
-def fig1_network_topology(G: nx.Graph, out_path: Path, top_n: int = 300) -> None:
-    deg_dict   = dict(G.degree())
-    core_nodes = sorted(deg_dict, key=deg_dict.get, reverse=True)[:top_n]
-    SG = G.subgraph(core_nodes).copy()
+def fig1_network_topology(G: nx.Graph, out_path: Path, top_n: int = 0) -> None:
+    # top_n=0 で全ノード・全エッジを表示
+    if top_n and top_n < G.number_of_nodes():
+        deg_dict   = dict(G.degree())
+        core_nodes = sorted(deg_dict, key=deg_dict.get, reverse=True)[:top_n]
+        SG = G.subgraph(core_nodes).copy()
+        SG.remove_nodes_from(list(nx.isolates(SG)))
+        if len(SG) > 0:
+            largest_cc = max(nx.connected_components(SG), key=len)
+            SG = SG.subgraph(largest_cc).copy()
+    else:
+        SG = G
 
-    SG.remove_nodes_from(list(nx.isolates(SG)))
-
-    if len(SG) > 0:
-        largest_cc = max(nx.connected_components(SG), key=len)
-        SG = SG.subgraph(largest_cc).copy()
-
-    print("    Calculating Kamada-Kawai layout...")
-    pos = nx.kamada_kawai_layout(SG)
-
-    T = eq9_transitivity(SG)
-    D = eq10_density(SG)
     N = SG.number_of_nodes()
     M = SG.number_of_edges()
 
-    fig, ax = plt.subplots(figsize=(10, 8))
+    if N > 500:
+        print(f"    Calculating spring layout (|V|={N:,}, |E|={M:,})...")
+        pos = nx.spring_layout(SG, seed=42, k=1.5 / max(N ** 0.5, 1), iterations=50)
+    else:
+        print(f"    Calculating Kamada-Kawai layout (|V|={N:,}, |E|={M:,})...")
+        pos = nx.kamada_kawai_layout(SG)
+
+    T = eq9_transitivity(SG)
+    D = eq10_density(SG)
+
+    fig, ax = plt.subplots(figsize=(14, 12))
     ax.set_aspect("equal")
     ax.axis("off")
 
@@ -432,39 +618,41 @@ def fig1_network_topology(G: nx.Graph, out_path: Path, top_n: int = 300) -> None
     for u, v in SG.edges():
         x0, y0 = pos[u]; x1, y1 = pos[v]
         edge_x += [x0, x1, None]; edge_y += [y0, y1, None]
-    ax.plot(edge_x, edge_y, lw=0.8, color="black", alpha=0.5, zorder=1)
+    ax.plot(edge_x, edge_y, lw=0.4, color="black", alpha=0.3, zorder=1)
 
-    deg    = dict(SG.degree())
-    max_d  = max(deg.values()) if deg else 1
+    deg   = dict(SG.degree())
+    max_d = max(deg.values()) if deg else 1
+    node_size = max(5, 200 // max(N // 500, 1))
 
     xs_all, ys_all, sizes_all = [], [], []
     for n in SG.nodes():
         xs_all.append(pos[n][0])
         ys_all.append(pos[n][1])
-        sizes_all.append(30 + 300 * (deg[n] / max_d))
+        sizes_all.append(node_size + node_size * 4 * (deg[n] / max_d))
     ax.scatter(xs_all, ys_all, s=sizes_all, facecolors="none", edgecolors="black",
-               linewidths=1.5, zorder=2, alpha=0.85)
+               linewidths=0.8, zorder=2, alpha=0.7)
 
     ref_degs = sorted({1, max(2, max_d // 4), max(4, max_d // 2), max_d})
-    size_handles = [plt.scatter([], [], s=30 + 300*(v/max_d),
-                                facecolors="none", edgecolors="black", linewidths=1.5,
+    size_handles = [plt.scatter([], [], s=node_size + node_size * 4 * (v / max_d),
+                                facecolors="none", edgecolors="black", linewidths=0.8,
                                 label=f"k = {v}") for v in ref_degs]
     ax.legend(handles=size_handles, loc="lower right",
               fontsize=9, title="Degree (node size)", frameon=False, scatterpoints=1)
 
     infobox(ax, [
-        "Giant Component Topology",
-        f"  Transitivity (Eq.9) T = {T:.4f}",
-        f"  Density      (Eq.10) D = {D:.3e}",
+        "Full Network Topology",
+        f"  Transitivity T = {T:.4f}",
+        f"  Density      D = {D:.3e}",
         f"  |V| = {N:,}   |E| = {M:,}",
         f"  Max degree  = {max_d:,}",
     ], loc="upper left")
 
-    ax.set_title("USPTO Design Patent Co-citation Core Topology\n"
-                 "(Kamada-Kawai layout, hollow nodes scaled by degree)",
+    layout_name = "Spring layout" if N > 500 else "Kamada-Kawai layout"
+    ax.set_title(f"USPTO Design Patent Similarity Network — All Nodes & Edges\n"
+                 f"({layout_name}, nodes scaled by degree)",
                  fontsize=12, fontweight="bold")
     fig.tight_layout()
-    fig.savefig(out_path)
+    fig.savefig(out_path, dpi=FIG_DPI)
     plt.close(fig)
     print(f"  [Fig1] -> {out_path}")
 
@@ -1001,86 +1189,42 @@ def fig8_ergm_coefficients(out_dir: Path, ergm_csv_path: Path = None) -> None:
 # Main
 # ─────────────────────────────────────────────────────────────────────
 def main() -> None:
-    parser = argparse.ArgumentParser(description="USPTO design patent ERGM Visualizer v4")
-    parser.add_argument("--ergm-dir",      default="ergm_input")
-    parser.add_argument("--out-dir",       default="output")
-    parser.add_argument("--top-n",         type=int, default=300)
-    parser.add_argument("--bc-k",          type=int, default=500)
-    parser.add_argument("--no-fig1",       action="store_true")
-    parser.add_argument("--no-fig6",       action="store_true")
-    # MCMC estimation flags
-    parser.add_argument("--estimate-ergm", action="store_true",
-                        help="Run Robbins-Monro MCMLE and save ergm_results.csv")
-    parser.add_argument("--ergm-csv",      default=None,
-                        help="Path to existing ergm_results CSV for fig8")
-    parser.add_argument("--ergm-subgraph", type=int, default=500,
-                        help="Top-degree nodes for ERGM subgraph (default 500)")
-    parser.add_argument("--ergm-outer",    type=int, default=40,
-                        help="Robbins-Monro outer iterations (default 40)")
-    parser.add_argument("--ergm-mcmc",     type=int, default=300,
-                        help="MCMC samples per outer iteration (default 300)")
+    parser = argparse.ArgumentParser(
+        description="USPTO design patent similarity network visualizer (Fig1 only)"
+    )
+    parser.add_argument(
+        "--data-dir",
+        default="/mnt/eightthdd/uspto/yes_pair/qwen",
+        help="Root directory to search recursively for *.jsonl files",
+    )
+    parser.add_argument("--out-dir", default="output/network")
+    parser.add_argument("--top-n",  type=int, default=14,
+                        help="Number of top classes to display (default: 14)")
     args = parser.parse_args()
 
-    ergm_dir = Path(args.ergm_dir)
+    data_dir = Path(args.data_dir)
     out_dir  = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    attr_path = ergm_dir / "attributes.txt"
-    arc_path  = ergm_dir / "arc_list.txt"
-    if not attr_path.exists() or not arc_path.exists():
-        print(f"ERROR: Files not found in {ergm_dir}", file=sys.stderr)
+    if not data_dir.exists():
+        print(f"ERROR: {data_dir} not found", file=sys.stderr)
         sys.exit(1)
 
-    print("Loading data...")
-    attrs = load_attrs(attr_path)
-    arcs  = load_arc_list(arc_path)
-    edges = arcs_to_undirected(arcs)
-    print(f"  {len(attrs):,} nodes,  {len(arcs):,} arcs  ->  {len(edges):,} undirected edges")
+    print(f"Loading JSONL files from {data_dir} ...")
+    class_pair_cnt, all_cls_cnt = load_class_pairs(data_dir)
 
-    G = build_graph(len(attrs), edges)
-    attach_attrs(G, attrs)
+    print("\nGenerating class heatmap...")
+    fig_class_heatmap(
+        class_pair_cnt, all_cls_cnt,
+        out_dir / "figE_class_heatmap.png",
+        top_n=args.top_n,
+    )
 
-    # Optionally run MCMC ERGM estimation
-    ergm_csv_path = Path(args.ergm_csv) if args.ergm_csv else None
-
-    if args.estimate_ergm:
-        print("\nRunning Robbins-Monro MCMLE ERGM estimation...")
-        node_class_dict = {i: G.nodes[i].get("primary_class", "") for i in G.nodes()}
-        ergm_df = estimate_ergm_mcmc(
-            G,
-            node_class_dict,
-            subgraph_size=args.ergm_subgraph,
-            n_outer=args.ergm_outer,
-            n_mcmc=args.ergm_mcmc,
-        )
-        csv_out = out_dir / "ergm_results.csv"
-        ergm_df.to_csv(csv_out, index=False)
-        print(f"  [ERGM CSV] -> {csv_out}")
-        print(ergm_df.to_string(index=False))
-        ergm_csv_path = csv_out
-
-    print("\nGenerating separated figures and LaTeX tables...")
-    if not args.no_fig1:
-        fig1_network_topology(G, out_dir / "fig1_network_topology.png", args.top_n)
-
-    fig2_ergm_statistics(G, arcs, edges, attrs, out_dir)
-    fig3_degree_distribution(G, out_dir, args.bc_k)
-    fig4_homophily_heatmap(G, edges, out_dir)
-    fig5_sender_receiver(G, arcs, out_dir)
-
-    if not args.no_fig6:
-        fig6_gw_statistics(G, out_dir)
-
-    fig7_date_guard(G, arcs, attrs, out_dir)
-    fig8_ergm_coefficients(out_dir, ergm_csv_path)
-
-    print(f"\nDone. All outputs generated in '{out_dir}/'")
+    print(f"\nDone. Output in '{out_dir}/'")
 
 
 if __name__ == "__main__":
     # Usage:
     #   python visualize_ergm_network.py
-    #   python visualize_ergm_network.py --no-fig1 --no-fig6
-    #   python visualize_ergm_network.py --estimate-ergm --ergm-subgraph 300 --ergm-outer 20
-    #   python visualize_ergm_network.py --ergm-csv output/ergm_results.csv
+    #   python visualize_ergm_network.py --data-dir /mnt/eightthdd/uspto/yes_pair/qwen --top-n 14
     main()
