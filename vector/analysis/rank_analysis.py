@@ -174,22 +174,27 @@ def plot_ccdf(records: list[dict], img_type: str, out_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Figure 2: Scatter（全件、中ぬきマーカー）
 # ---------------------------------------------------------------------------
-def plot_scatter(records: list[dict], img_type: str, out_path: Path) -> None:
+def plot_scatter(
+    records: list[dict],
+    img_type: str,
+    out_path: Path,
+    xlim: tuple[float, float] | None = None,
+    ylim: tuple[float, float] | None = None,
+) -> None:
     fig, ax = plt.subplots(figsize=(COLUMN_W, 2.8))
 
     n_cand = records[0]["n_candidates"]
 
     # プロット順: No → Unknown → Yes（Yes が最前面だが中ぬきなので下が透ける）
     layers = [
-        # label,      color,      marker, size, lw,   label_str
-        ("No",      "#d62728", "x",  18,  0.5, None),
-        ("Unknown", "#aaaaaa", "^",   9,  0.4, None),
-        ("Yes",     "#1f77b4", "D",  10,  0.8, None),   # 菱形（Diamond）
+        ("No",      "#d62728", "x",  18,  0.5),
+        ("Unknown", "#aaaaaa", "^",   9,  0.4),
+        ("Yes",     "#1f77b4", "D",  10,  0.8),   # 菱形（Diamond）
     ]
     yes_n = sum(1 for r in records if r["judgment"] == "Yes")
     no_n  = sum(1 for r in records if r["judgment"] == "No")
 
-    for label, color, marker, size, lw, _ in layers:
+    for label, color, marker, size, lw in layers:
         recs = [r for r in records if r["judgment"] == label]
         if not recs:
             continue
@@ -205,7 +210,6 @@ def plot_scatter(records: list[dict], img_type: str, out_path: Path) -> None:
 
         zorder = {"No": 2, "Unknown": 1, "Yes": 3}[label]
         if marker == "x":
-            # x マーカーは facecolor=edgecolor で描画（中ぬき指定不可）
             ax.scatter(x, y, c=color, marker=marker, s=size,
                        linewidths=lw, label=leg, zorder=zorder, alpha=0.6)
         else:
@@ -215,11 +219,12 @@ def plot_scatter(records: list[dict], img_type: str, out_path: Path) -> None:
 
     ax.set_xlabel("Rank $r$")
     ax.set_ylabel("Cosine similarity")
-    ax.set_xlim(-5, n_cand + 10)
-    ax.set_ylim(0.38, 1.02)
+    ax.set_xlim(xlim if xlim is not None else (-5, n_cand + 10))
+    ax.set_ylim(ylim if ylim is not None else (0.38, 1.02))
     ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(5))
     ax.yaxis.set_minor_locator(ticker.AutoMinorLocator(5))
-    ax.legend(fontsize=7.5, framealpha=0.85, edgecolor="gray", loc="lower left")
+    legend_loc = "lower right" if xlim is not None else "lower left"
+    ax.legend(fontsize=7.5, framealpha=0.85, edgecolor="gray", loc=legend_loc)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
@@ -438,6 +443,13 @@ def main() -> None:
     print("[2/3] Plotting scatter...")
     plot_scatter(records, args.img_type,
                  out_stats / f"rank_scatter_{args.img_type}.png")
+
+    # ── Figure 2b: Scatter（拡大: rank ≤ 20, similarity ≥ 0.85） ──
+    print("[2b] Plotting scatter (zoom)...")
+    plot_scatter(records, args.img_type,
+                 out_stats / f"rank_scatter_{args.img_type}_zoom.png",
+                 xlim=(-0.5, 21),
+                 ylim=(0.84, 1.02))
 
     # ── Figure 3: ペア比較画像（Yes & rank <= top_k） ──────────
     print(f"[3/3] Plotting pair comparison images (Yes, rank <= {args.top_k})...")
