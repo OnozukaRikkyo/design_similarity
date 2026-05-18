@@ -318,9 +318,6 @@ def plot_ccdf(
     fit: bool = True,
     years_label: str = "",
     degrees_out: np.ndarray | None = None,
-    k_fit_min: float = 10.0,
-    k_fit_max: float = 200.0,
-    line_shift: float = 3.0,
 ) -> None:
     k_in, ccdf_in = _ccdf_xy(degrees)
 
@@ -337,18 +334,15 @@ def plot_ccdf(
         unique_k, counts = np.unique(k_in, return_counts=True)
         cumcounts = np.cumsum(counts)
         ccdf_unique = (len(degrees) - (cumcounts - counts)) / len(degrees)
-        # 直線域（初期カーブ終了〜末端落ち込み前）のみでフィット
-        mask = (unique_k >= k_fit_min) & (unique_k <= k_fit_max)
-        alpha_c, log10c2, r2_c = fit_powerlaw(unique_k[mask], ccdf_unique[mask])
-        # line_shift 倍右にずらして描画（傾きは同じ、y = C * s^alpha * k^(-alpha)）
-        k_fit = np.logspace(np.log10(k_fit_min * line_shift), np.log10(k_fit_max * line_shift), 300)
+        alpha_c, log10c2, r2_c = fit_powerlaw(unique_k, ccdf_unique)
+        k_fit = np.logspace(np.log10(k_in.min()), np.log10(k_in.max()), 300)
         fit_label = r"$\gamma_{{in}}-1 = {:.2f}$".format(alpha_c) if degrees_out is not None else r"$\gamma-1 = {:.2f}$".format(alpha_c)
         ax.plot(
-            k_fit, 10**log10c2 * (line_shift ** alpha_c) * k_fit**(-alpha_c),
+            k_fit, 10**log10c2 * k_fit**(-alpha_c),
             color="black", lw=1.0, ls="--", zorder=4,
             label=fit_label,
         )
-        print(f"CCDF in  べき乗則: γ-1 = {alpha_c:.3f},  R² = {r2_c:.3f}  (k=[{k_fit_min:.0f}, {k_fit_max:.0f}])")
+        print(f"CCDF in  べき乗則: γ-1 = {alpha_c:.3f},  R² = {r2_c:.3f}")
 
     all_k, all_y = [k_in], [ccdf_in]
 
@@ -365,15 +359,14 @@ def plot_ccdf(
             cumcounts_o = np.cumsum(counts_o)
             No = len(degrees_out)
             ccdf_unique_o = (No - (cumcounts_o - counts_o)) / No
-            mask_o = (unique_ko >= k_fit_min) & (unique_ko <= k_fit_max)
-            alpha_o, log10c_o, r2_o = fit_powerlaw(unique_ko[mask_o], ccdf_unique_o[mask_o])
-            k_fit_o = np.logspace(np.log10(k_fit_min * line_shift), np.log10(k_fit_max * line_shift), 300)
+            alpha_o, log10c_o, r2_o = fit_powerlaw(unique_ko, ccdf_unique_o)
+            k_fit_o = np.logspace(np.log10(k_out.min()), np.log10(k_out.max()), 300)
             ax.plot(
-                k_fit_o, 10**log10c_o * (line_shift ** alpha_o) * k_fit_o**(-alpha_o),
+                k_fit_o, 10**log10c_o * k_fit_o**(-alpha_o),
                 color="#d62728", lw=1.0, ls="--", zorder=4,
                 label=r"$\gamma_{{out}}-1 = {:.2f}$".format(alpha_o),
             )
-            print(f"CCDF out べき乗則: γ-1 = {alpha_o:.3f},  R² = {r2_o:.3f}  (k=[{k_fit_min:.0f}, {k_fit_max:.0f}])")
+            print(f"CCDF out べき乗則: γ-1 = {alpha_o:.3f},  R² = {r2_o:.3f}")
         all_k.append(k_out)
         all_y.append(ccdf_out)
 
@@ -419,18 +412,6 @@ def main() -> None:
         help="べき乗則フィットを省略"
     )
     parser.add_argument(
-        "--k-fit-min", type=float, default=10.0,
-        help="CCDFフィット開始次数（初期カーブ終了後の直線域開始点、default: 10）"
-    )
-    parser.add_argument(
-        "--k-fit-max", type=float, default=200.0,
-        help="CCDFフィット終了次数（末端落ち込み前の直線域終了点、default: 200）"
-    )
-    parser.add_argument(
-        "--k-line-shift", type=float, default=3.0,
-        help="CCDF補助線をデータ点から離すための右シフト係数（log空間の乗数、default: 3.0）"
-    )
-    parser.add_argument(
         "--usetex", action="store_true",
         help="LaTeX でテキストレンダリング（要 texlive）"
     )
@@ -452,8 +433,7 @@ def main() -> None:
     _set_style(args.usetex)
 
     plot_pdf(degrees,  Path(args.out_pdf),  fit=not args.no_fit, years_label=years_label)
-    plot_ccdf(degrees, Path(args.out_ccdf), fit=not args.no_fit, years_label=years_label,
-              k_fit_min=args.k_fit_min, k_fit_max=args.k_fit_max, line_shift=args.k_line_shift)
+    plot_ccdf(degrees, Path(args.out_ccdf), fit=not args.no_fit, years_label=years_label)
 
 
 if __name__ == "__main__":
