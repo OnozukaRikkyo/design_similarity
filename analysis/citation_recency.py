@@ -163,9 +163,7 @@ def _style_ax_log(ax: plt.Axes, years: list[int], ylabel: str,
 
     xs = list(range(len(years)))
     ax.set_xticks(xs)
-    # Alternate labels to avoid overlap without rotating
-    labels = [str(y) if i % 2 == 0 else "" for i, y in enumerate(years)]
-    ax.set_xticklabels(labels, rotation=0, ha="center")
+    ax.set_xticklabels([str(y) for y in years], rotation=45, ha="right")
 
     ax.set_xlabel("Filing Year", labelpad=8)
     ax.set_ylabel(ylabel, labelpad=8)
@@ -173,11 +171,12 @@ def _style_ax_log(ax: plt.Axes, years: list[int], ylabel: str,
     ax.set_xlim(-0.7, len(years) - 0.3)
 
 
-def _draw_boxplot(ax: plt.Axes, data: list, color: str) -> None:
+def _draw_boxplot(ax: plt.Axes, data: list, color: str) -> dict:
     bp = ax.boxplot(data, positions=range(len(data)), **BOX_PROPS)
     for patch in bp["boxes"]:
         patch.set_facecolor(color)
         patch.set_alpha(0.7)
+    return bp
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -194,14 +193,18 @@ def make_individual_figs(df: pd.DataFrame, out_dir: Path, min_n: int) -> None:
 
     # ── Fig. 1: Vintage Effect ──────────────────────────────────────
     fig1, ax1 = plt.subplots(figsize=(8, 6))
-    _draw_boxplot(ax1, cnt_data, COLOR_CUMUL)
+    bp1 = _draw_boxplot(ax1, cnt_data, COLOR_CUMUL)
     _style_ax_log(ax1, years,
-                  ylabel=r"Cumulative Co-citations, $C$",
-                  title="Vintage Effect: Cumulative Co-citations by Filing Year")
-    y_lo, y_hi = ax1.get_ylim()
-    ax1.set_ylim(y_lo, y_hi * 2.5)
-    ax1.text(0.96, 0.96, f"$N = {n_total:,}$",
-             transform=ax1.transAxes, ha="right", va="top", fontsize=11)
+                  ylabel="Citation Count",
+                  title="Vintage Effect: Citation Count by Filing Year")
+    ax1.set_yscale("linear")
+    ax1.yaxis.set_major_formatter(ticker.ScalarFormatter())
+    ax1.set_ylim(0, 25)
+
+    for i, vals in enumerate(cnt_data):
+        whisker_top = bp1["whiskers"][2 * i + 1].get_ydata()[1]
+        text_y = min(whisker_top, 25) + 0.3
+        ax1.text(i, text_y, str(len(vals)), ha="center", va="bottom", fontsize=10)
 
     path1 = out_dir / "fig_vintage_effect.png"
     fig1.tight_layout()

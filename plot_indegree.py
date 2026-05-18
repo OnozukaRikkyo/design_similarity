@@ -20,6 +20,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import LogLocator, NullFormatter
+from matplotlib.colors import LinearSegmentedColormap
+
+# 濃い紫→青→緑→黄緑→オレンジ→赤（黄色を避けた6アンカー）
+_YEAR_CMAP = LinearSegmentedColormap.from_list(
+    "year_dark",
+    ["#5500AA", "#0044CC", "#007700", "#669900", "#CC5500", "#CC0000"],
+)
 
 # ---------------------------------------------------------------------------
 # パス設定
@@ -101,6 +108,29 @@ def compute_outdegrees(edge_dir: Path, years: list[str] | None) -> Counter:
                 if s:
                     counter[s] += 1
     return counter
+
+
+def compute_degrees_per_year(edge_dir: Path, years: list[str] | None) -> dict[str, np.ndarray]:
+    """年ごとに無向グラフの次数を集計し、{year_str: degrees_array} を返す。"""
+    result: dict[str, np.ndarray] = {}
+    for path in _csv_files(edge_dir, years):
+        if not path.exists():
+            print(f"警告: {path} が見つかりません")
+            continue
+        year = path.stem
+        counter: Counter = Counter()
+        print(f"  読み込み中: {path}")
+        with open(path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                s = row.get("source", "").strip()
+                t = row.get("target", "").strip()
+                if s:
+                    counter[s] += 1
+                if t:
+                    counter[t] += 1
+        if counter:
+            result[year] = np.array(list(counter.values()), dtype=np.int64)
+    return result
 
 
 def compute_degrees_undirected(edge_dir: Path, years: list[str] | None) -> Counter:
@@ -377,9 +407,9 @@ def plot_ccdf(
         all_k.append(k_out)
         all_y.append(ccdf_out)
 
-    title = r"Complementary CDF $P(K \geq k)$  [undirected]"
+    title = r""
     if years_label:
-        title += f"\nUSPTO design-patent citation graph  ({years_label})"
+        title += f"USPTO design-patent citation graph  ({years_label})"
     ax.set_title(title, fontsize=8, pad=4)
     ax.set_xscale("log")
     ax.set_yscale("log")
@@ -388,6 +418,63 @@ def plot_ccdf(
     ax.legend(fontsize=7, frameon=False, handlelength=1.5)
     _set_equal_log_limits(ax, all_k, all_y)
     _apply_log_axis_style(ax)
+    _save(fig, out_path)
+
+
+# ---------------------------------------------------------------------------
+# (c) CCDF 年別カラープロット
+# ---------------------------------------------------------------------------
+def plot_ccdf_by_year(
+    degrees_by_year: dict[str, np.ndarray],
+    out_path: Path,
+    fit_year: str = "2020",
+    k_fit_min: float = 10.0,
+    k_fit_max: float = 200.0,
+    line_shift: float = 3.0,
+    years_label: str = "",
+) -> None:
+    sorted_years = sorted(degrees_by_year.keys())
+    n = len(sorted_years)
+    colors = _YEAR_CMAP(np.linspace(0, 1, n))
+
+    fig, ax = plt.subplots(figsize=(3.6, 3.6))
+
+    for i, year in enumerate(sorted_years):
+        k, ccdf = _ccdf_xy(degrees_by_year[year])
+        ax.plot(k, ccdf, color=colors[i], lw=0.9, alpha=0.85,
+                label=year, rasterized=True)
+
+    # fit_year のデータでべき乗則フィット
+    if fit_year in degrees_by_year:
+        degrees_fit = degrees_by_year[fit_year]
+        k_fit_data, _ = _ccdf_xy(degrees_fit)
+        unique_k, counts = np.unique(k_fit_data, return_counts=True)
+        cumcounts = np.cumsum(counts)
+        ccdf_unique = (len(degrees_fit) - (cumcounts - counts)) / len(degrees_fit)
+        mask = (unique_k >= k_fit_min) & (unique_k <= k_fit_max)
+        alpha_c, log10c2, r2_c = fit_powerlaw(unique_k[mask], ccdf_unique[mask])
+        k_line = np.logspace(np.log10(k_fit_min * line_shift),
+                             np.log10(k_fit_max * line_shift), 300)
+        ax.plot(
+            k_line,
+            10**log10c2 * (line_shift ** alpha_c) * k_line**(-alpha_c),
+            color="black", lw=1.0, ls="--", zorder=4,
+            label=r"$\gamma-1 = {:.2f}$  ({})".format(alpha_c, fit_year),
+        )
+        print(f"CCDF fit ({fit_year}): γ-1 = {alpha_c:.3f},  R² = {r2_c:.3f}  "
+              f"(k=[{k_fit_min:.0f}, {k_fit_max:.0f}])")
+    else:
+        print(f"警告: fit_year={fit_year} がデータに見つかりません。フィット省略。")
+
+    ax.set_title(f"USPTO design-patent citation graph  ({years_label})", fontsize=8, pad=4)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel(r"Degree $k$")
+    ax.set_ylabel(r"$P(K \geq k)$")
+    ax.set_xlim(left=0.9, right=1e3)
+    _apply_log_axis_style(ax)
+    ax.legend(fontsize=6, frameon=False, handlelength=1.2,
+              ncol=2, loc="lower left")
     _save(fig, out_path)
 
 
@@ -439,21 +526,24 @@ def main() -> None:
     years = args.years or None
     years_label = ", ".join(years) if years else "2007–2022"
 
-    print("次数を集計中（無向グラフ）...")
-    counter = compute_degrees_undirected(Path(args.edge_dir), years)
-    if not counter:
+    print("年ごとに次数を集計中（無向グラフ）...")
+    degrees_by_year = compute_degrees_per_year(Path(args.edge_dir), years)
+    if not degrees_by_year:
         print("エラー: エッジが見つかりませんでした。--edge-dir を確認してください。")
         return
 
-    degrees = np.array(list(counter.values()), dtype=np.int64)
-    print(f"\nノード数={len(degrees):,}  "
-          f"min={degrees.min()}, max={degrees.max()}, mean={degrees.mean():.2f}")
+    all_degrees = np.concatenate(list(degrees_by_year.values()))
+    print(f"\nノード数（全年合計）={len(all_degrees):,}  "
+          f"min={all_degrees.min()}, max={all_degrees.max()}, mean={all_degrees.mean():.2f}")
 
     _set_style(args.usetex)
 
-    plot_pdf(degrees,  Path(args.out_pdf),  fit=not args.no_fit, years_label=years_label)
-    plot_ccdf(degrees, Path(args.out_ccdf), fit=not args.no_fit, years_label=years_label,
-              k_fit_min=args.k_fit_min, k_fit_max=args.k_fit_max, line_shift=args.k_line_shift)
+    plot_pdf(all_degrees, Path(args.out_pdf), fit=not args.no_fit, years_label=years_label)
+    plot_ccdf_by_year(
+        degrees_by_year, Path(args.out_ccdf),
+        k_fit_min=args.k_fit_min, k_fit_max=args.k_fit_max,
+        line_shift=args.k_line_shift, years_label=years_label,
+    )
 
 
 if __name__ == "__main__":
