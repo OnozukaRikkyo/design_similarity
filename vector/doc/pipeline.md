@@ -11,10 +11,14 @@
 /home/sonozuka/design_similarity/vector/
   filter_pairs_by_class.py   ← Step 1: クラス別ペア抽出
   build_class_vectors.py     ← Step 2: 画像ベクトル生成
+  build_rank_index.py        ← Step 3: 全件ベクトル結合・L2正規化
+  compute_ranks.py           ← Step 4: ベクトルランク検索
   doc/
     pipeline.md              ← このファイル
     filter_pairs_by_class.md
     build_class_vectors.md
+    build_rank_index.md
+    compute_ranks.md
 ```
 
 ---
@@ -44,6 +48,24 @@
       file_paths_{year}.txt
     front/
     overview/
+
+        ↓ Step 3: build_rank_index.py --class {CLASS}
+          （全年を結合・重複排除・L2正規化）
+
+  rank_index/
+    perspective/
+      patent_ids.npy                  ← shape (N,) int64  ユニーク特許
+      vectors_l2norm.npy              ← shape (N, 2048) float32  L2正規化済み
+      file_paths.txt
+    front/
+    overview/
+
+        ↓ Step 4: compute_ranks.py --class {CLASS}
+          （各ペアで A→全件検索し B の順位を取得）
+
+  rank_results/
+    {sim_func}/                       ← cosine_numpy / cosine_faiss
+      {year}.jsonl                    ← 1行 = 1 (ペア×タイプ) レコード
 ```
 
 ### 複数クラスを扱う場合
@@ -55,10 +77,14 @@
   D18/
     cited_image_pairs/
     cited_image_vectors/
-  D5/       ← 同じスクリプトを --class D5 で実行するだけで追加される
+    rank_index/
+    rank_results/
+  D10/      ← 同じスクリプトを --class D10 で実行するだけで追加される
     cited_image_pairs/
     cited_image_vectors/
-  D23/
+    rank_index/
+    rank_results/
+  D5/
     ...
 ```
 
@@ -72,11 +98,15 @@ cd /home/sonozuka/design_similarity
 # --- D18（初回・GPU 不要な場合） ---
 python vector/filter_pairs_by_class.py --class D18
 python vector/build_class_vectors.py   --class D18 --no-gpu
+python vector/build_rank_index.py      --class D18
+python vector/compute_ranks.py         --class D18
 
-# --- 別クラス（D5）を追加する場合 ---
-python vector/filter_pairs_by_class.py --class D5
-python vector/build_class_vectors.py   --class D5 --no-gpu
+# --- 別クラス（D10）を追加する場合 ---
+python vector/filter_pairs_by_class.py --class D10
+python vector/build_class_vectors.py   --class D10 --no-gpu
 # cited_image_vectors/ にベクトルがなければ --no-gpu を外す（GPU が必要）
+python vector/build_rank_index.py      --class D10
+python vector/compute_ranks.py         --class D10
 ```
 
 ---
@@ -217,5 +247,7 @@ for vtype in ('perspective', 'front', 'overview'):
 | `extract_cited_image_pairs.py` | 全クラスペアJSONLを生成 | [image_pairs.md](../../doc/image_pairs.md) |
 | `add_class_to_edge_list.py` | エッジリストにクラス情報を付与 | [edge_list_with_class.md](../../doc/edge_list_with_class.md) |
 | `build_cited_image_vectors.py` | 全クラスのベクトルを生成 | [cited_image_vectors.md](../../../image_vector/doc/cited_image_vectors.md) |
-| **`filter_pairs_by_class.py`** | **クラス別ペア抽出** | [filter_pairs_by_class.md](filter_pairs_by_class.md) |
-| **`build_class_vectors.py`** | **クラス別ベクトル生成** | [build_class_vectors.md](build_class_vectors.md) |
+| **`filter_pairs_by_class.py`** | **Step 1: クラス別ペア抽出** | [filter_pairs_by_class.md](filter_pairs_by_class.md) |
+| **`build_class_vectors.py`** | **Step 2: クラス別ベクトル生成** | [build_class_vectors.md](build_class_vectors.md) |
+| **`build_rank_index.py`** | **Step 3: 全件インデックス構築** | [build_rank_index.md](build_rank_index.md) |
+| **`compute_ranks.py`** | **Step 4: ベクトルランク検索** | [compute_ranks.md](compute_ranks.md) |
