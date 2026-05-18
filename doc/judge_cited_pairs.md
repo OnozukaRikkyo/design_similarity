@@ -133,7 +133,7 @@ judge_similarity()  ─── design_similarity.BACKEND に従って推論
 | `pick_common_type(record, prefer)` | source・target に共通する図タイプを選択。`prefer` で優先タイプを指定可能。 |
 | `save_debug_image(...)` | 2枚の画像を左右並べた PNG を `debug/image/` に保存。判定結果（similarity・confidence・reason）を画像下部に描画。 |
 | `process_year(year, img_type, resume)` | 1年分の JSONL を1行ずつ処理し結果を出力。 |
-| `reannotate_debug(year)` | 新規判定は行わず、既存の `similarity_results/{year}.jsonl` から debug 画像を confidence/reason 付きで再生成する。 |
+| `reannotate_debug(year)` | 新規判定は行わず、既存の `{OUT_DIR}/{year}.jsonl` から debug 画像を confidence/reason 付きで再生成する。 |
 
 ---
 
@@ -241,4 +241,4 @@ python judge_cited_pairs.py 2007 --reannotate
 | 前工程 | 本スクリプト | 後工程 |
 |--------|-------------|--------|
 | [image_pairs.md](image_pairs.md) | `judge_cited_pairs.py` | [extract_yes_pairs.md](extract_yes_pairs.md) |
-| `cited_image_pairs/{year}.jsonl` | → `similarity_results/{year}.jsonl` | `extract_yes_pairs.py` / `analyze_ergm.py` |
+| `cited_image_pairs/{year}.jsonl` | → `qwen_similarity_results/{year}.jsonl` | `extract_yes_pairs.py` / `analyze_ergm.py` |

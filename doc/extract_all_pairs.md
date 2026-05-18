@@ -1,6 +1,6 @@
 # 全ペアのフォーマット変換 (`extract_all_pairs.py`)
 
-`similarity_results/` の JSONL から **全レコード**（similarity 値を問わず）を読み込み、
+`{backend}_similarity_results/` の JSONL から **全レコード**（similarity 値を問わず）を読み込み、
 CSV の特許メタデータを付加して年別 JSONL に書き出す。
 
 目的は**フォーマット変換のみ**であり、レコードの絞り込みや画像生成は行わない。

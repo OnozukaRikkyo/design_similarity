@@ -1,5 +1,5 @@
 """
-similarity_results の JSONL から全レコードを抽出し、
+{backend}_similarity_results の JSONL から全レコードを抽出し、
 - /mnt/eightthdd/uspto/all_pair/{backend}_all_pairs/{year}.jsonl
     : 年別 JSONL（特許メタデータ付き・1行1レコード）
 を保存する。

@@ -6,7 +6,7 @@
   qwen   … Qwen-VL ローカル GPU 推論
 
 制約 (gemini):
-  - 15 RPM / 1,000,000 TPM / 1,500 RPD
+  - 15 RPM / 250,000 TPM / 500 RPD
 """
 
 import time

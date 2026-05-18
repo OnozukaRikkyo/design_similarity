@@ -26,7 +26,7 @@ from image_processor import ImageProcessor
 
 # ─── バックエンド選択（ここを編集して切り替える） ───────────────────────────
 BACKEND = "qwen"   # "gemini" | "qwen"
-# BACKEND = "qwen"   # "gemini" | "qwen"
+# BACKEND = "gemini"   # "gemini" | "qwen"
 
 CSV_DIR = Path("/mnt/eightthdd/uspto/data")
 

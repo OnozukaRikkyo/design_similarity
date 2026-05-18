@@ -9,7 +9,7 @@ build_ergm_input.py の出力 (ergm_input/) を対象に、
   Table 6 対応指標: density, mean_degree, transitivity, reciprocity, betweenness
   ERGM 診断:       triangle/two-path 統計
 優先度3: ERGM 推定係数可視化             (EstimNetDirected 出力 *.csv)
-優先度4: Gemini Yes ペアとの突合         (similarity_results/*.jsonl, attributes.txt)
+優先度4: Gemini Yes ペアとの突合         (qwen_similarity_results/*.jsonl, attributes.txt)
 Phase SW: Small-World 検証              (arc_list.txt)
 
 出力:
@@ -1041,8 +1041,8 @@ def main() -> None:
         help="build_ergm_input.py の出力ディレクトリ (default: ergm_input)",
     )
     parser.add_argument(
-        "--sim-dir", default="/mnt/eightthdd/uspto/similarity_results",
-        help="Gemini 類似判定 jsonl のディレクトリ",
+        "--sim-dir", default="/mnt/eightthdd/uspto/qwen_similarity_results",
+        help="類似判定 jsonl のディレクトリ",
     )
     parser.add_argument(
         "--out-dir", default="output",

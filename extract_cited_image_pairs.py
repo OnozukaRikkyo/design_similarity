@@ -8,7 +8,7 @@
 
 入力:
     /mnt/eightthdd/uspto/edge_list/{year}.csv        (build_edge_list.py の出力)
-    /mnt/eightthdd/uspto/image_numpy_data_no_text/
+    /mnt/eightthdd/uspto/data/{year}.csv             (image_index.py 経由で参照)
 
 出力:
     /mnt/eightthdd/uspto/cited_image_pairs/{year}.jsonl  (1行=1ユニークペア)
@@ -29,25 +29,16 @@
 
 import csv
 import json
-import pickle
-import re
 import sys
 from pathlib import Path
 
-import numpy as np
+from image_index import load_image_index, patent_id_int
 
 # ---------------------------------------------------------------------------
 # パス設定
 # ---------------------------------------------------------------------------
-IMG_DATA_DIR = Path("/mnt/eightthdd/uspto/image_numpy_data_no_text")
-EDGE_DIR     = Path("/mnt/eightthdd/uspto/edge_list")
-OUT_DIR      = Path("/mnt/eightthdd/uspto/cited_image_pairs")
-INDEX_CACHE  = OUT_DIR / "_image_index.pkl"
-
-DESIGN_OFFSET = 10_000_000_000
-IMAGE_TYPES   = ["front", "overview", "perspective"]
-
-D_PATTERN = re.compile(r"D0*(\d+)", re.IGNORECASE)
+EDGE_DIR = Path("/mnt/eightthdd/uspto/edge_list")
+OUT_DIR  = Path("/mnt/eightthdd/uspto/cited_image_pairs")
 
 EDGE_ATTRS = [
     "patentApplicationNumber",
@@ -60,69 +51,6 @@ EDGE_ATTRS = [
     "groupArtUnitNumber",
     "techCenter",
 ]
-
-
-# ---------------------------------------------------------------------------
-# ユーティリティ
-# ---------------------------------------------------------------------------
-def patent_id_int(did: str) -> int | None:
-    """'D0543613' → 10000543613"""
-    m = D_PATTERN.search(did)
-    if not m:
-        return None
-    return DESIGN_OFFSET + int(m.group(1))
-
-
-# ---------------------------------------------------------------------------
-# グローバル画像インデックス構築
-#
-# 構造:
-#   image_ids_{year}.npy          shape (N,) int64  : 全特許 ID
-#   image_meta_{year}_{type}.npy  shape (M,) int32  : image_ids へのインデックス
-#   image_files_{year}_{type}.txt M 行              : 対応する画像ファイルパス
-#
-# 出力: { patent_id_int: { image_type: file_path } }
-# ---------------------------------------------------------------------------
-def build_image_index(img_data_dir: Path, use_cache: bool = True) -> dict[int, dict[str, str]]:
-    if use_cache and INDEX_CACHE.exists():
-        print(f"キャッシュから画像インデックスをロード: {INDEX_CACHE}", flush=True)
-        with open(INDEX_CACHE, "rb") as f:
-            return pickle.load(f)
-
-    print("画像インデックス構築中...", end=" ", flush=True)
-    index: dict[int, dict[str, str]] = {}
-
-    for id_file in sorted(img_data_dir.glob("image_ids_*.npy")):
-        m = re.search(r"image_ids_(\d+)\.npy", id_file.name)
-        if not m:
-            continue
-        year = m.group(1)
-        ids = np.load(id_file)
-
-        for img_type in IMAGE_TYPES:
-            meta_file = img_data_dir / f"image_meta_{year}_{img_type}.npy"
-            list_file  = img_data_dir / f"image_files_{year}_{img_type}.txt"
-            if not meta_file.exists() or not list_file.exists():
-                continue
-
-            meta = np.load(meta_file)
-            with open(list_file) as f:
-                paths = f.read().splitlines()
-
-            for idx, path in zip(meta, paths):
-                pid = int(ids[idx])
-                entry = index.setdefault(pid, {})
-                if img_type not in entry:
-                    entry[img_type] = path
-
-    print(f"{len(index):,} 件の特許を登録")
-
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    with open(INDEX_CACHE, "wb") as f:
-        pickle.dump(index, f, protocol=pickle.HIGHEST_PROTOCOL)
-    print(f"インデックスをキャッシュ: {INDEX_CACHE}")
-
-    return index
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +110,7 @@ def extract_pairs(edge_csv: Path, index: dict[int, dict[str, str]], out_jsonl: P
 # メイン
 # ---------------------------------------------------------------------------
 def main(years: list[str] | None = None, rebuild_index: bool = False) -> None:
-    index = build_image_index(IMG_DATA_DIR, use_cache=not rebuild_index)
+    index = load_image_index(rebuild=rebuild_index)
 
     if years is None:
         edge_files = sorted(EDGE_DIR.glob("*.csv"))

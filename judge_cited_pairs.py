@@ -3,7 +3,8 @@
 共引用画像ペアに対して意匠類似判定を実行する。
 
 入力:  /mnt/eightthdd/uspto/cited_image_pairs/{year}.jsonl
-出力:  /mnt/eightthdd/uspto/similarity_results/{year}.jsonl
+出力:  BACKEND="qwen"    → /mnt/eightthdd/uspto/qwen_similarity_results/{year}.jsonl
+       BACKEND="gemini"  → /mnt/eightthdd/uspto/similarity_results/{year}.jsonl
 
 各レコードに image_type_used / similarity / confidence / reason を追加して出力。
 中断した場合は --resume（デフォルト有効）で続きから再開できる。
@@ -223,7 +224,8 @@ def process_year(
                                 type_used,
                                 result=result,
                             )
-                        time.sleep(5)
+                        if design_similarity.BACKEND != "qwen":
+                            time.sleep(5)  # Gemini レート制限対策（qwen はローカルなので不要）
                         break
                     except Exception as e:
                         err = str(e)

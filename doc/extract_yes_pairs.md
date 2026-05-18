@@ -1,7 +1,7 @@
 # Yes 判定ペアの抽出・可視化 (`extract_yes_pairs.py`)
 
-`similarity_results/` の JSONL から `similarity=Yes` のレコードを抽出し、
-JSON ファイルと画像ペアを保存する。パイプラインの最終ステップ。
+`qwen_similarity_results/` の JSONL から `similarity=Yes` のレコードを抽出し、
+JSONL ファイルと画像ペアを保存する。パイプラインの最終ステップ。
 
 ---
 
@@ -17,11 +17,11 @@ JSON ファイルと画像ペアを保存する。パイプラインの最終ス
 
 | | パス | 内容 |
 |---|---|---|
-| 入力 | `/mnt/eightthdd/uspto/similarity_results/*.jsonl` | `judge_cited_pairs.py` の出力 |
+| 入力 | `/mnt/eightthdd/uspto/qwen_similarity_results/*.jsonl` | `judge_cited_pairs.py` の出力 |
 | 入力 | `/mnt/eightthdd/uspto/data/*.csv` | 特許属性（`title`, `class` 列を使用） |
-| 出力 | `debug/yes_json/<src>__<tgt>.json` | Yes レコードの JSON（1ファイル1ペア） |
-| 出力 | `debug/yes_image_pair/<src>__<tgt>.png` | source + target の横並び画像 |
-| キャッシュ | `debug/_patent_index.pkl` | `patent_id → {title, class}` の pickle キャッシュ |
+| 出力 | `/mnt/eightthdd/uspto/yes_pair/qwen_yes_pairs/{year}.jsonl` | Yes レコードの年別 JSONL |
+| 出力 | `/mnt/eightthdd/uspto/yes_pair/qwen_yes_image_pair/` | source + target の横並び画像 |
+| キャッシュ | `/mnt/eightthdd/uspto/yes_pair/_patent_index.pkl` | `patent_id → {title, class}` の pickle キャッシュ |
 
 ---
 
@@ -29,14 +29,14 @@ JSON ファイルと画像ペアを保存する。パイプラインの最終ス
 
 ```
 data/*.csv  ──→  build_patent_index()  ──→  patent_index (dict)
-                  └─ pickle キャッシュ              │
-                     (debug/_patent_index.pkl)      │
-                                                    │
-similarity_results/*.jsonl  ──→  process_file()  ←─┘
+                  └─ pickle キャッシュ                    │
+                     (yes_pair/_patent_index.pkl)         │
+                                                          │
+qwen_similarity_results/*.jsonl  ──→  process_file()  ←──┘
       │  similarity=Yes のみ抽出
       │
-      ├──→  debug/yes_json/<src>__<tgt>.json   （JSON レコード）
-      └──→  debug/yes_image_pair/<src>__<tgt>.png  （横並び画像）
+      ├──→  yes_pair/qwen_yes_pairs/{year}.jsonl   （年別 JSONL）
+      └──→  yes_pair/qwen_yes_image_pair/          （横並び画像）
 ```
 
 ---
@@ -85,7 +85,7 @@ similarity_results/*.jsonl  ──→  process_file()  ←─┘
 
 ## 実行方法
 
-引数なし。`similarity_results/` 以下の全 JSONL を処理する。
+引数なし。`qwen_similarity_results/` 以下の全 JSONL を処理する（`BACKEND` により自動決定）。
 
 ```bash
 python extract_yes_pairs.py
@@ -98,6 +98,6 @@ python extract_yes_pairs.py
 | 前工程 | 本スクリプト | 後工程 |
 |--------|-------------|--------|
 | [judge_cited_pairs.md](judge_cited_pairs.md) | `extract_yes_pairs.py` | 目視確認・レビュー |
-| `similarity_results/*.jsonl` | → `debug/yes_json/`, `debug/yes_image_pair/` | — |
+| `qwen_similarity_results/*.jsonl` | → `yes_pair/qwen_yes_pairs/`, `yes_pair/qwen_yes_image_pair/` | — |
 
 パイプライン全体の位置付けは [pipeline.md](pipeline.md) を参照。
