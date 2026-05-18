@@ -13,6 +13,7 @@
   build_class_vectors.py     ← Step 2: 画像ベクトル生成
   build_rank_index.py        ← Step 3: 全件ベクトル結合・L2正規化
   compute_ranks.py           ← Step 4: ベクトルランク検索
+  join_judgments.py          ← Step 5: ランク結果と LLM 判定を結合
   doc/
     pipeline.md              ← このファイル
     filter_pairs_by_class.md
@@ -66,6 +67,15 @@
   rank_results/
     {sim_func}/                       ← cosine_numpy / cosine_faiss
       {year}.jsonl                    ← 1行 = 1 (ペア×タイプ) レコード
+
+        ↓ Step 5: join_judgments.py --class {CLASS} --sim {sim_func}
+          （ランク結果・LLM 判定・画像パスを結合して一括保存）
+
+  rank_judgments/
+    {sim_func}/
+      all.jsonl                       ← 全年・全タイプ結合（1行 = 1 ペア×タイプ）
+                                         追加フィールド: judgment, confidence, reason,
+                                                         source_image, target_image
 ```
 
 ### 複数クラスを扱う場合
@@ -100,6 +110,7 @@ python vector/filter_pairs_by_class.py --class D18
 python vector/build_class_vectors.py   --class D18 --no-gpu
 python vector/build_rank_index.py      --class D18
 python vector/compute_ranks.py         --class D18
+python vector/join_judgments.py        --class D18
 
 # --- 別クラス（D10）を追加する場合 ---
 python vector/filter_pairs_by_class.py --class D10
@@ -107,6 +118,7 @@ python vector/build_class_vectors.py   --class D10 --no-gpu
 # cited_image_vectors/ にベクトルがなければ --no-gpu を外す（GPU が必要）
 python vector/build_rank_index.py      --class D10
 python vector/compute_ranks.py         --class D10
+python vector/join_judgments.py        --class D10
 ```
 
 ---
@@ -251,3 +263,4 @@ for vtype in ('perspective', 'front', 'overview'):
 | **`build_class_vectors.py`** | **Step 2: クラス別ベクトル生成** | [build_class_vectors.md](build_class_vectors.md) |
 | **`build_rank_index.py`** | **Step 3: 全件インデックス構築** | [build_rank_index.md](build_rank_index.md) |
 | **`compute_ranks.py`** | **Step 4: ベクトルランク検索** | [compute_ranks.md](compute_ranks.md) |
+| **`join_judgments.py`** | **Step 5: ランク結果と LLM 判定の結合** | — |

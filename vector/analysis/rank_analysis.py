@@ -2,16 +2,19 @@
 """
 ランク検索結果の統計分析・可視化。
 
+事前に join_judgments.py を実行して rank_judgments/ を生成しておくこと。
+
 出力:
   vector/output/{CLASS}/{sim_func}/
-    rank_ccdf_{type}.png     — 順位の CCDF（Yes/No 別）
-    rank_scatter_{type}.png  — 順位 vs 類似度の散布図（Yes/No 別マーカー）
-    pair_comparison/
-      {src}--{tgt}_{type}_top10.png  — ベースペア + Top-10 近傍の画像グリッド
+    rank_ccdf_{type}.png     — Figure 1: 順位の CCDF（log-log、Yes/No 別）
+    rank_scatter_{type}.png  — Figure 2: 順位 vs 類似度の散布図（全件、Yes/No 別マーカー）
+
+  /mnt/eightthdd/uspto/class/{CLASS}/rank_analysis/{sim_func}/{type}/pair_comparison/
+    {src}--{tgt}_rank{r:03d}.png  — Figure 3: Rank ≤ topk の全 Yes ペア（各1枚）
 
 実行:
     python vector/analysis/rank_analysis.py --class D18
-    python vector/analysis/rank_analysis.py --class D18 --sim cosine_numpy --type perspective
+    python vector/analysis/rank_analysis.py --class D18 --top-k 10
 """
 
 import argparse
@@ -25,26 +28,23 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.ticker as ticker
 import numpy as np
-from PIL import Image
+from tqdm import tqdm
 
-# ImageProcessor は project root に存在
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from image_processor import ImageProcessor
 
 # ---------------------------------------------------------------------------
 # パス定数
 # ---------------------------------------------------------------------------
-CLASS_BASE    = Path("/mnt/eightthdd/uspto/class")
-QWEN_DIR      = Path("/mnt/eightthdd/uspto/qwen_similarity_results")
-OUT_BASE      = Path(__file__).resolve().parents[1] / "output"
+CLASS_BASE = Path("/mnt/eightthdd/uspto/class")
+OUT_BASE   = Path(__file__).resolve().parents[1] / "output"   # vector/output/
+COLUMN_W   = 3.37   # PRL single column [inch]
 DESIGN_OFFSET = 10_000_000_000
 
 # ---------------------------------------------------------------------------
-# Matplotlib スタイル（PRL シングルカラム準拠）
+# Matplotlib スタイル（統計図用、PRL シングルカラム準拠）
 # ---------------------------------------------------------------------------
-COLUMN_W = 3.37   # PRL single column width [inch]
-
-def _set_style() -> None:
+def _set_style_stats() -> None:
     plt.rcParams.update({
         "font.family":         "serif",
         "font.serif":          ["Times New Roman", "DejaVu Serif", "Palatino"],
@@ -75,78 +75,69 @@ def _set_style() -> None:
         "ps.fonttype":         42,
     })
 
+
+# ---------------------------------------------------------------------------
+# Matplotlib スタイル（画像グリッド図用、大きいフォント）
+# ---------------------------------------------------------------------------
+def _set_style_image() -> None:
+    plt.rcParams.update({
+        "font.family":         "serif",
+        "font.serif":          ["Times New Roman", "DejaVu Serif", "Palatino"],
+        "mathtext.fontset":    "stix",
+        "font.size":           12,
+        "axes.labelsize":      11,
+        "axes.titlesize":      12,
+        "xtick.labelsize":     10,
+        "ytick.labelsize":     10,
+        "axes.linewidth":      1.0,
+        "figure.dpi":          200,
+        "savefig.dpi":         200,
+        "savefig.bbox":        "tight",
+        "pdf.fonttype":        42,
+        "ps.fonttype":         42,
+    })
+
+
 # ---------------------------------------------------------------------------
 # ユーティリティ
 # ---------------------------------------------------------------------------
-def patent_id_to_int(s: str) -> int:
-    return DESIGN_OFFSET + int(s.lstrip("D").lstrip("0") or "0")
-
 def int_to_patent_id(n: int) -> str:
     return f"D{(n - DESIGN_OFFSET):07d}"
+
+def patent_id_to_int(s: str) -> int:
+    return DESIGN_OFFSET + int(s.lstrip("D").lstrip("0") or "0")
 
 # ---------------------------------------------------------------------------
 # データ読み込み
 # ---------------------------------------------------------------------------
-def load_rank_records(target_class: str, sim_func: str, img_type: str) -> list[dict]:
-    base = CLASS_BASE / target_class / "rank_results" / sim_func
-    records = []
-    for f in sorted(base.glob("[0-9]*.jsonl")):
-        for line in f.read_text().splitlines():
-            if line.strip():
-                r = json.loads(line)
-                if r["type"] == img_type:
-                    records.append(r)
-    return records
-
-
-def load_qwen_lookup() -> dict[tuple[str, str], dict]:
-    """全年の qwen 判定結果を (source, target) → dict で返す。"""
-    lookup: dict[tuple[str, str], dict] = {}
-    for f in sorted(QWEN_DIR.glob("[0-9]*.jsonl")):
-        for line in f.read_text().splitlines():
-            if line.strip():
-                r = json.loads(line)
-                lookup[(r["source"], r["target"])] = r
-    return lookup
-
-
-def join_judgment(records: list[dict], qwen: dict[tuple[str, str], dict]) -> list[dict]:
-    """rank records に LLM 判定・画像パスを追加する。"""
-    for r in records:
-        q = qwen.get((r["source"], r["target"]))
-        r["judgment"]   = q["similarity"] if q else "Unknown"
-        r["confidence"] = q.get("confidence", 0) if q else 0
-        if q:
-            si = q.get("source_images", {})
-            ti = q.get("target_images", {})
-            r["source_image"] = list(si.values())[0] if si else None
-            r["target_image"] = list(ti.values())[0] if ti else None
-        else:
-            r["source_image"] = None
-            r["target_image"] = None
-    return records
+def load_joined(target_class: str, sim_func: str, img_type: str) -> list[dict]:
+    """rank_judgments/{sim_func}/all.jsonl から指定タイプのレコードを返す。"""
+    fp = CLASS_BASE / target_class / "rank_judgments" / sim_func / "all.jsonl"
+    if not fp.exists():
+        raise FileNotFoundError(
+            f"{fp} が見つかりません。先に join_judgments.py を実行してください。"
+        )
+    return [
+        json.loads(line)
+        for line in fp.read_text().splitlines()
+        if line.strip() and json.loads(line).get("type") == img_type
+    ]
 
 # ---------------------------------------------------------------------------
-# Figure 1: CCDF of rank
+# Figure 1: CCDF of rank（log-log）
 # ---------------------------------------------------------------------------
-def plot_ccdf(records: list[dict], out_path: Path) -> None:
-    """
-    x 軸: 順位 r、y 軸: P(rank >= r)。
-    Yes / No グループ別および全体のランダム期待値を重ねて描画する。
-    """
+def plot_ccdf(records: list[dict], img_type: str, out_path: Path) -> None:
     fig, ax = plt.subplots(figsize=(COLUMN_W, 2.8))
-
-    n_cand = records[0]["n_candidates"]
 
     groups = {
         "Yes": [r for r in records if r["judgment"] == "Yes"],
         "No":  [r for r in records if r["judgment"] == "No"],
     }
-    style = {
-        "Yes": dict(color="#1f77b4", lw=1.4, zorder=3,
-                    label=f"Similar (Yes, $n={len(groups['Yes'])}$)"),
+    styles = {
+        "Yes": dict(color="#1f77b4", lw=1.4, ls="-",  zorder=3,
+                    label=f"Similar ($n={len(groups['Yes'])}$)"),
         "No":  dict(color="#d62728", lw=1.0, ls="--", zorder=2,
-                    label=f"Non-similar (No, $n={len(groups['No'])}$)"),
+                    label=f"Non-similar ($n={len(groups['No'])}$)"),
     }
 
     for label, recs in groups.items():
@@ -155,69 +146,72 @@ def plot_ccdf(records: list[dict], out_path: Path) -> None:
         ranks  = np.sort([r["rank"] for r in recs])
         n      = len(ranks)
         ccdf_y = np.arange(n, 0, -1) / n
-        kw = style[label]
-        ax.plot(ranks, ccdf_y, **kw)
+        ax.plot(ranks, ccdf_y, **styles[label])
 
-    # ランダム期待値（一様分布）
-    r_rand = np.array([1, n_cand])
-    ax.plot(r_rand, 1 - (r_rand - 1) / n_cand,
-            color="gray", lw=0.8, ls=":", zorder=1, label="Random baseline")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    n_cand = records[0]["n_candidates"]
+    ax.set_xlim(0.8, n_cand * 1.5)
+    ax.set_ylim(5e-3, 2.0)
 
     ax.set_xlabel("Rank $r$")
     ax.set_ylabel(r"$P(\mathrm{rank} \geq r)$")
-    ax.set_xlim(0, n_cand + 5)
-    ax.set_ylim(0, 1.05)
-    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(5))
-    ax.yaxis.set_minor_locator(ticker.AutoMinorLocator(5))
+    ax.set_title(
+        f"Rank CCDF of cited design patent pairs "
+        f"(D18, {img_type})",
+        pad=4,
+    )
+
+    ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
+    ax.yaxis.set_major_formatter(ticker.ScalarFormatter())
     ax.legend(fontsize=7.5, framealpha=0.85, edgecolor="gray", loc="upper right")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
     plt.close(fig)
-    print(f"  → {out_path}")
+    print(f"  -> {out_path}")
 
 # ---------------------------------------------------------------------------
-# Figure 2: Scatter (rank vs cosine similarity)
+# Figure 2: Scatter（全件、中ぬきマーカー）
 # ---------------------------------------------------------------------------
-def plot_scatter(records: list[dict], selected: dict, out_path: Path) -> None:
-    """
-    x 軸: 順位、y 軸: コサイン類似度。
-    Yes / No / Unknown を異なるマーカーで描画し、
-    選択代表ペアを強調表示する。
-    """
+def plot_scatter(records: list[dict], img_type: str, out_path: Path) -> None:
     fig, ax = plt.subplots(figsize=(COLUMN_W, 2.8))
 
     n_cand = records[0]["n_candidates"]
 
-    # プロット順：No を下に、Yes を上に重ねる
+    # プロット順: No → Unknown → Yes（Yes が最前面だが中ぬきなので下が透ける）
     layers = [
-        ("Unknown", "#aaaaaa", "^",  8, 0.4),
-        ("No",      "#d62728", "x", 18, 0.5),
-        ("Yes",     "#1f77b4", "o", 12, 0.7),
+        # label,      color,      marker, size, lw,   label_str
+        ("No",      "#d62728", "x",  18,  0.5, None),
+        ("Unknown", "#aaaaaa", "^",   9,  0.4, None),
+        ("Yes",     "#1f77b4", "D",  10,  0.8, None),   # 菱形（Diamond）
     ]
-    for label, color, marker, size, alpha in layers:
+    yes_n = sum(1 for r in records if r["judgment"] == "Yes")
+    no_n  = sum(1 for r in records if r["judgment"] == "No")
+
+    for label, color, marker, size, lw, _ in layers:
         recs = [r for r in records if r["judgment"] == label]
         if not recs:
             continue
-        x = [r["rank"] for r in recs]
-        y = [r["similarity"] for r in recs]
-        kw = dict(marker=marker, s=size, alpha=alpha, linewidths=0.8,
-                  label=f"{label} ($n={len(recs)}$)",
-                  zorder={"Unknown": 1, "No": 2, "Yes": 3}[label])
-        if marker == "x":
-            ax.scatter(x, y, c=color, **kw)
-        elif marker == "o":
-            ax.scatter(x, y, facecolors=color, edgecolors=color, **kw)
-        else:
-            ax.scatter(x, y, facecolors="none", edgecolors=color, **kw)
+        x = np.array([r["rank"] for r in recs])
+        y = np.array([r["similarity"] for r in recs])
 
-    # 代表ペアを強調
-    ax.scatter([selected["rank"]], [selected["similarity"]],
-               marker="*", s=120, facecolors="none",
-               edgecolors="#2ca02c", linewidths=1.5, zorder=5,
-               label=(f"Selected pair "
-                      f"($r={selected['rank']}$, "
-                      f"$r_{{\\rm s}}={selected['similarity']:.3f}$)"))
+        if label == "Yes":
+            leg = f"Similar ($n={yes_n}$)"
+        elif label == "No":
+            leg = f"Non-similar ($n={no_n}$)"
+        else:
+            leg = f"Unknown ($n={len(recs)}$)"
+
+        zorder = {"No": 2, "Unknown": 1, "Yes": 3}[label]
+        if marker == "x":
+            # x マーカーは facecolor=edgecolor で描画（中ぬき指定不可）
+            ax.scatter(x, y, c=color, marker=marker, s=size,
+                       linewidths=lw, label=leg, zorder=zorder, alpha=0.6)
+        else:
+            ax.scatter(x, y, facecolors="none", edgecolors=color,
+                       marker=marker, s=size,
+                       linewidths=lw, label=leg, zorder=zorder, alpha=0.85)
 
     ax.set_xlabel("Rank $r$")
     ax.set_ylabel("Cosine similarity")
@@ -225,140 +219,25 @@ def plot_scatter(records: list[dict], selected: dict, out_path: Path) -> None:
     ax.set_ylim(0.38, 1.02)
     ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(5))
     ax.yaxis.set_minor_locator(ticker.AutoMinorLocator(5))
-    ax.legend(fontsize=6.5, framealpha=0.85, edgecolor="gray", loc="lower left")
+    ax.legend(fontsize=7.5, framealpha=0.85, edgecolor="gray", loc="lower left")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
     plt.close(fig)
-    print(f"  → {out_path}")
+    print(f"  -> {out_path}")
 
 # ---------------------------------------------------------------------------
 # 画像ロード
 # ---------------------------------------------------------------------------
 def load_image(path: str | None) -> np.ndarray | None:
-    """ImageProcessor で前処理した特許図面を RGB numpy array で返す。"""
-    if path is None:
+    if not path:
         return None
     try:
         img = ImageProcessor.process_file(path).convert("RGB")
         return np.array(img)
     except Exception as e:
-        print(f"  [warn] 画像ロード失敗: {path}: {e}", file=sys.stderr)
+        print(f"  [warn] {path}: {e}", file=sys.stderr)
         return None
-
-# ---------------------------------------------------------------------------
-# Figure 3: ペア比較画像グリッド
-# ---------------------------------------------------------------------------
-def plot_pair_comparison(
-    rec: dict,
-    top10: list[dict],
-    out_path: Path,
-) -> None:
-    """
-    レイアウト（3行 × 5列）:
-      Row 0 : [Query A (2列)] [Cited B (2列)] [情報テキスト (1列)]
-      Row 1 : Top-1 〜 Top-5 近傍（各1列）
-      Row 2 : Top-6 〜 Top-10 近傍（各1列）
-    """
-    N_COLS  = 5
-    CELL_W  = 1.55   # [inch]
-    CELL_H  = 2.00   # [inch]
-    fig_w   = CELL_W * N_COLS
-    fig_h   = CELL_H * 3
-
-    fig = plt.figure(figsize=(fig_w, fig_h))
-    gs  = gridspec.GridSpec(
-        3, N_COLS,
-        figure=fig,
-        hspace=0.45, wspace=0.08,
-        top=0.91, bottom=0.02, left=0.01, right=0.99,
-    )
-
-    def _panel(ax, img_path, title, caption, border=None):
-        arr = load_image(img_path)
-        ax.set_xticks([]); ax.set_yticks([])
-        if arr is not None:
-            ax.imshow(arr, aspect="equal", interpolation="lanczos")
-        else:
-            ax.set_facecolor("#e8e8e8")
-            ax.text(0.5, 0.5, "N/A", ha="center", va="center",
-                    transform=ax.transAxes, fontsize=8)
-        ax.set_title(title, fontsize=7.0, pad=2, fontweight="bold",
-                     wrap=True)
-        ax.set_xlabel(caption, fontsize=6.0, labelpad=3)
-        if border:
-            for sp in ax.spines.values():
-                sp.set_edgecolor(border); sp.set_linewidth(2.5)
-        else:
-            for sp in ax.spines.values():
-                sp.set_linewidth(0.5)
-
-    # ── Row 0: Query A ───────────────────────────────────────────
-    ax_a = fig.add_subplot(gs[0, :2])
-    _panel(ax_a,
-           rec["source_image"],
-           f"Query: {rec['source']}",
-           "")
-
-    # ── Row 0: Cited target B (baseline / expected) ──────────────
-    j_color = "#1f77b4" if rec["judgment"] == "Yes" else "#d62728"
-    ax_b = fig.add_subplot(gs[0, 2:4])
-    _panel(ax_b,
-           rec["target_image"],
-           f"Expected (cited): {rec['target']}",
-           (f"rank={rec['rank']}/{rec['n_candidates']}"
-            f"   $r_{{\\rm s}}$={rec['similarity']:.4f}\n"
-            f"LLM: {rec['judgment']} (conf={rec['confidence']})"),
-           border=j_color)
-
-    # ── Row 0: 情報テキスト ──────────────────────────────────────
-    ax_info = fig.add_subplot(gs[0, 4])
-    ax_info.axis("off")
-    info = (
-        f"Class : D18\n"
-        f"Type  : perspective\n"
-        f"N     : {rec['n_candidates'] + 1}\n"
-        f"Cited rank : {rec['rank']}\n"
-        f"Similarity : {rec['similarity']:.4f}\n"
-        f"LLM   : {rec['judgment']}\n"
-        f"Conf  : {rec['confidence']}"
-    )
-    ax_info.text(0.08, 0.95, info, va="top", ha="left",
-                 transform=ax_info.transAxes,
-                 fontsize=6.5, family="monospace",
-                 bbox=dict(boxstyle="round,pad=0.4",
-                           fc="white", ec="#aaa", alpha=0.9))
-
-    # ── Rows 1–2: Top-10 近傍 ───────────────────────────────────
-    for i, nb in enumerate(top10[:10]):
-        row = 1 + i // N_COLS
-        col = i % N_COLS
-        ax_n = fig.add_subplot(gs[row, col])
-
-        pid_str  = int_to_patent_id(nb["patent_id_int"])
-        is_cited = (pid_str == rec["target"])
-        border   = "#ff7f0e" if is_cited else None
-        caption  = f"$r_{{\\rm s}}$={nb['similarity']:.4f}"
-        if is_cited:
-            caption += "\n[cited target]"
-
-        _panel(ax_n,
-               nb["file_path"],
-               f"#{nb['rank']}  {pid_str}",
-               caption,
-               border=border)
-
-    n_cand = rec["n_candidates"]
-    fig.suptitle(
-        (f"Nearest-neighbor retrieval: query {rec['source']}"
-         f"  (D18 / perspective, $N={n_cand + 1}$)"),
-        fontsize=8.5, y=0.995,
-    )
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=200)
-    plt.close(fig)
-    print(f"  → {out_path}")
 
 # ---------------------------------------------------------------------------
 # Top-k 近傍検索
@@ -383,7 +262,6 @@ def get_topk(
     sims = vecs @ vecs[src_row]
     sims[src_row] = -2.0
     top_idx = np.argsort(sims)[::-1][:k]
-
     return [
         {
             "patent_id_int": int(ids[i]),
@@ -395,16 +273,133 @@ def get_topk(
     ]
 
 # ---------------------------------------------------------------------------
-# 代表ペアの選択
+# Figure 3: ペア比較画像グリッド（1 ペアにつき 1 PNG）
 # ---------------------------------------------------------------------------
-def select_representative(records: list[dict]) -> dict:
-    """Yes 判定かつ信頼度 5 のペアの中からランク中央値に最も近いものを選ぶ。"""
-    yes5 = [r for r in records if r["judgment"] == "Yes" and r["confidence"] == 5]
-    pool = yes5 if yes5 else [r for r in records if r["judgment"] == "Yes"]
-    if not pool:
-        pool = records
-    med = np.median([r["rank"] for r in pool])
-    return min(pool, key=lambda r: abs(r["rank"] - med))
+def plot_pair_comparison(
+    rec: dict,
+    top10: list[dict],
+    out_path: Path,
+) -> None:
+    """
+    3行 × 5列レイアウト:
+      Row 0: [Query A (2列)] [Cited B (2列)] [情報テキスト (1列)]
+      Row 1: Top-1 〜 Top-5
+      Row 2: Top-6 〜 Top-10
+    """
+    N_COLS = 5
+    CELL_W = 1.65
+    CELL_H = 2.1
+
+    fig = plt.figure(figsize=(CELL_W * N_COLS, CELL_H * 3))
+    gs  = gridspec.GridSpec(
+        3, N_COLS,
+        figure=fig,
+        hspace=0.55, wspace=0.10,
+        top=0.90, bottom=0.02, left=0.01, right=0.99,
+    )
+
+    TITLE_FS   = 11
+    CAPTION_FS = 10
+    INFO_FS    = 10
+    LEGEND_FS  = 12   # 凡例・強調テキスト
+
+    def _panel(ax, img_path, title, caption, border=None, border_lw=3.0):
+        arr = load_image(img_path)
+        ax.set_xticks([]); ax.set_yticks([])
+        if arr is not None:
+            ax.imshow(arr, aspect="equal", interpolation="lanczos")
+        else:
+            ax.set_facecolor("#e8e8e8")
+            ax.text(0.5, 0.5, "N/A", ha="center", va="center",
+                    transform=ax.transAxes, fontsize=CAPTION_FS)
+        ax.set_title(title, fontsize=TITLE_FS, pad=3, fontweight="bold")
+        ax.set_xlabel(caption, fontsize=CAPTION_FS, labelpad=4)
+        for sp in ax.spines.values():
+            if border:
+                sp.set_edgecolor(border); sp.set_linewidth(border_lw)
+            else:
+                sp.set_linewidth(0.6)
+
+    # Row 0: Query A
+    ax_a = fig.add_subplot(gs[0, :2])
+    _panel(ax_a, rec["source_image"],
+           f"Query: {rec['source']}", "")
+
+    # Row 0: Cited target B
+    j_color = "#1f77b4" if rec["judgment"] == "Yes" else "#d62728"
+    ax_b = fig.add_subplot(gs[0, 2:4])
+    _panel(ax_b, rec["target_image"],
+           f"Expected (cited): {rec['target']}",
+           (f"rank = {rec['rank']} / {rec['n_candidates']}"
+            f"   $r_{{\\rm s}}$ = {rec['similarity']:.4f}\n"
+            f"LLM: {rec['judgment']}   conf = {rec['confidence']}"),
+           border=j_color)
+
+    # Row 0: 情報テキスト
+    ax_info = fig.add_subplot(gs[0, 4])
+    ax_info.axis("off")
+    info = (
+        f"Class  : D18\n"
+        f"Type   : perspective\n"
+        f"N      : {rec['n_candidates'] + 1}\n"
+        f"Rank   : {rec['rank']}\n"
+        f"Sim    : {rec['similarity']:.4f}\n"
+        f"LLM    : {rec['judgment']}\n"
+        f"Conf   : {rec['confidence']}"
+    )
+    ax_info.text(0.06, 0.95, info, va="top", ha="left",
+                 transform=ax_info.transAxes,
+                 fontsize=INFO_FS, family="monospace",
+                 bbox=dict(boxstyle="round,pad=0.4",
+                           fc="white", ec="#999", alpha=0.9))
+
+    # Rows 1–2: Top-10 近傍
+    for i, nb in enumerate(top10[:10]):
+        row = 1 + i // N_COLS
+        col = i % N_COLS
+        ax_n = fig.add_subplot(gs[row, col])
+
+        pid_str  = int_to_patent_id(nb["patent_id_int"])
+        is_cited = (pid_str == rec["target"])
+        border   = "#ff7f0e" if is_cited else None
+        caption  = f"$r_{{\\rm s}}$ = {nb['similarity']:.4f}"
+        if is_cited:
+            caption += "\n[cited target]"
+
+        _panel(ax_n,
+               nb["file_path"],
+               f"#{nb['rank']}  {pid_str}",
+               caption,
+               border=border)
+
+    # 凡例（境界線の意味）
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor="none", edgecolor="#1f77b4", linewidth=3,
+              label="Similar (LLM: Yes)"),
+        Patch(facecolor="none", edgecolor="#d62728", linewidth=3,
+              label="Non-similar (LLM: No)"),
+        Patch(facecolor="none", edgecolor="#ff7f0e", linewidth=3,
+              label="Cited target in top-10"),
+    ]
+    fig.legend(handles=legend_elements,
+               fontsize=LEGEND_FS,
+               loc="lower center",
+               ncol=3,
+               framealpha=0.9,
+               edgecolor="gray",
+               bbox_to_anchor=(0.5, -0.01))
+
+    n_cand = rec["n_candidates"]
+    fig.suptitle(
+        (f"Nearest-neighbor retrieval: query {rec['source']}"
+         f"  (D18 / perspective,  $N = {n_cand + 1}$)"),
+        fontsize=12, y=0.995,
+    )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
 
 # ---------------------------------------------------------------------------
 # メイン
@@ -422,45 +417,57 @@ def main() -> None:
                         help="ペア比較図の近傍数（デフォルト: 10）")
     args = parser.parse_args()
 
-    _set_style()
-
-    out_dir = OUT_BASE / args.target_class / args.sim
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     # ── データ読み込み ──────────────────────────────────────────
-    print("Loading rank records...")
-    records = load_rank_records(args.target_class, args.sim, args.img_type)
-    print(f"  {len(records)} records ({args.img_type})")
-
-    print("Loading LLM judgments...")
-    qwen    = load_qwen_lookup()
-    records = join_judgment(records, qwen)
-
+    print("Loading joined rank-judgment records...")
+    records = load_joined(args.target_class, args.sim, args.img_type)
+    n_cand  = records[0]["n_candidates"]
     from collections import Counter
     cnt = Counter(r["judgment"] for r in records)
-    print(f"  Yes={cnt['Yes']}  No={cnt['No']}  Unknown={cnt.get('Unknown',0)}")
-
-    rep = select_representative(records)
-    print(f"  Representative: {rep['source']} → {rep['target']}"
-          f"  rank={rep['rank']}  sim={rep['similarity']:.4f}"
-          f"  {rep['judgment']} (conf={rep['confidence']})")
+    print(f"  {len(records)} records  Yes={cnt['Yes']}  No={cnt['No']}  Unknown={cnt.get('Unknown',0)}")
 
     # ── Figure 1: CCDF ──────────────────────────────────────────
+    _set_style_stats()
+    out_stats = OUT_BASE / args.target_class / args.sim
+    out_stats.mkdir(parents=True, exist_ok=True)
+
     print("\n[1/3] Plotting CCDF...")
-    plot_ccdf(records, out_dir / f"rank_ccdf_{args.img_type}.png")
+    plot_ccdf(records, args.img_type,
+              out_stats / f"rank_ccdf_{args.img_type}.png")
 
     # ── Figure 2: Scatter ───────────────────────────────────────
     print("[2/3] Plotting scatter...")
-    plot_scatter(records, rep, out_dir / f"rank_scatter_{args.img_type}.png")
+    plot_scatter(records, args.img_type,
+                 out_stats / f"rank_scatter_{args.img_type}.png")
 
-    # ── Figure 3: ペア比較画像 ──────────────────────────────────
-    print("[3/3] Plotting pair comparison images...")
-    top10 = get_topk(rep["source"], args.img_type, args.target_class, k=args.top_k)
-    fname = f"{rep['source']}--{rep['target']}_{args.img_type}_top{args.top_k}.png"
-    plot_pair_comparison(rep, top10,
-                         out_dir / "pair_comparison" / fname)
+    # ── Figure 3: ペア比較画像（Yes & rank <= top_k） ──────────
+    print(f"[3/3] Plotting pair comparison images (Yes, rank <= {args.top_k})...")
+    _set_style_image()
 
-    print(f"\n完了  出力先: {out_dir}")
+    yes_topk = [
+        r for r in records
+        if r["judgment"] == "Yes" and r["rank"] <= args.top_k
+    ]
+    yes_topk.sort(key=lambda r: r["rank"])
+    print(f"  対象: {len(yes_topk)} 件")
+
+    out_img = (
+        CLASS_BASE / args.target_class
+        / "rank_analysis" / args.sim / args.img_type
+        / "pair_comparison"
+    )
+
+    for rec in tqdm(yes_topk, desc="pair images", unit="件"):
+        top10 = get_topk(rec["source"], args.img_type,
+                         args.target_class, k=args.top_k)
+        fname = (
+            f"{rec['source']}--{rec['target']}"
+            f"_rank{rec['rank']:03d}.png"
+        )
+        plot_pair_comparison(rec, top10, out_img / fname)
+
+    print(f"\n完了")
+    print(f"  統計図: {out_stats}")
+    print(f"  ペア画像: {out_img}")
 
 
 if __name__ == "__main__":
