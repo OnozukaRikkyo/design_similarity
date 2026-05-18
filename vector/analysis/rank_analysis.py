@@ -19,6 +19,7 @@
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -40,6 +41,27 @@ CLASS_BASE = Path("/mnt/eightthdd/uspto/class")
 OUT_BASE   = Path(__file__).resolve().parents[1] / "output"   # vector/output/
 COLUMN_W   = 3.37   # PRL single column [inch]
 DESIGN_OFFSET = 10_000_000_000
+
+FALLBACK_EXACT_KEYWORDS = ["identical", "exact", "same"]
+
+
+def build_exact_pattern(exact_keywords: list[str]) -> re.Pattern:
+    terms = "|".join(re.escape(k) for k in exact_keywords)
+    return re.compile(rf"\b({terms})\b", re.IGNORECASE)
+
+
+def classify_records(records: list[dict], exact_pattern: re.Pattern) -> list[dict]:
+    """Yes レコードに _label フィールド（Yes_exact / Yes_nonexact）を付与して返す。"""
+    for r in records:
+        if r["judgment"] == "Yes":
+            r["_label"] = (
+                "Yes_exact"
+                if exact_pattern.search(r.get("reason", ""))
+                else "Yes_nonexact"
+            )
+        else:
+            r["_label"] = r["judgment"]
+    return records
 
 # ---------------------------------------------------------------------------
 # Matplotlib スタイル（統計図用、PRL シングルカラム準拠）
@@ -185,33 +207,34 @@ def plot_scatter(
 
     n_cand = records[0]["n_candidates"]
 
-    # プロット順: No → Unknown → Yes（Yes が最前面だが中ぬきなので下が透ける）
-    layers = [
-        ("No",      "#d62728", "x",  18,  0.5),
-        ("Unknown", "#aaaaaa", "^",   9,  0.4),
-        ("Yes",     "#1f77b4", "D",  10,  0.8),   # 菱形（Diamond）
-    ]
-    yes_n = sum(1 for r in records if r["judgment"] == "Yes")
-    no_n  = sum(1 for r in records if r["judgment"] == "No")
+    n_exact    = sum(1 for r in records if r.get("_label") == "Yes_exact")
+    n_nonexact = sum(1 for r in records if r.get("_label") == "Yes_nonexact")
+    n_no       = sum(1 for r in records if r["judgment"] == "No")
+    n_unknown  = sum(1 for r in records if r["judgment"] == "Unknown")
 
-    for label, color, marker, size, lw in layers:
-        recs = [r for r in records if r["judgment"] == label]
+    # プロット順: No → Unknown → Yes_nonexact → Yes_exact（exact が最前面）
+    layers = [
+        ("No",           "#d62728", "x",  18,  0.5, f"Non-similar ($n={n_no}$)"),
+        ("Unknown",      "#aaaaaa", "^",   9,  0.4, f"Unknown ($n={n_unknown}$)"),
+        ("Yes_nonexact", "#1f77b4", "D",  10,  0.8, f"Similar, non-exact ($n={n_nonexact}$)"),
+        ("Yes_exact",    "#7b2d8b", "s",  14,  0.9, f"Exact match ($n={n_exact}$)"),
+    ]
+
+    for label, color, marker, size, lw, leg in layers:
+        recs = [r for r in records if r.get("_label", r["judgment"]) == label]
         if not recs:
             continue
         x = np.array([r["rank"] for r in recs])
         y = np.array([r["similarity"] for r in recs])
 
-        if label == "Yes":
-            leg = f"Similar ($n={yes_n}$)"
-        elif label == "No":
-            leg = f"Non-similar ($n={no_n}$)"
-        else:
-            leg = f"Unknown ($n={len(recs)}$)"
-
-        zorder = {"No": 2, "Unknown": 1, "Yes": 3}[label]
+        zorder = {"No": 2, "Unknown": 1, "Yes_nonexact": 3, "Yes_exact": 4}[label]
         if marker == "x":
             ax.scatter(x, y, c=color, marker=marker, s=size,
                        linewidths=lw, label=leg, zorder=zorder, alpha=0.6)
+        elif label == "Yes_exact":
+            ax.scatter(x, y, facecolors="none", edgecolors=color,
+                       marker=marker, s=size,
+                       linewidths=lw, label=leg, zorder=zorder, alpha=0.9)
         else:
             ax.scatter(x, y, facecolors="none", edgecolors=color,
                        marker=marker, s=size,
@@ -420,6 +443,8 @@ def main() -> None:
                         choices=["perspective", "front", "overview"])
     parser.add_argument("--top-k", type=int, default=10,
                         help="ペア比較図の近傍数（デフォルト: 10）")
+    parser.add_argument("--use-llm", action="store_true",
+                        help="Qwen LLM でキーワード取得（デフォルト: フォールバックキーワードを使用）")
     args = parser.parse_args()
 
     # ── データ読み込み ──────────────────────────────────────────
@@ -429,6 +454,22 @@ def main() -> None:
     from collections import Counter
     cnt = Counter(r["judgment"] for r in records)
     print(f"  {len(records)} records  Yes={cnt['Yes']}  No={cnt['No']}  Unknown={cnt.get('Unknown',0)}")
+
+    # ── Yes レコードを exact / non-exact に分類 ─────────────────
+    if args.use_llm:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from export_non_exact_pairs import ask_llm_for_keywords
+        yes_reasons = [r["reason"] for r in records if r["judgment"] == "Yes"]
+        print("\nQuerying Qwen for exact-match keywords ...")
+        exact_kws, _ = ask_llm_for_keywords(yes_reasons)
+    else:
+        exact_kws = FALLBACK_EXACT_KEYWORDS
+        print(f"\n[LLM スキップ] exact keywords: {exact_kws}  (--use-llm で有効化)")
+    exact_pattern = build_exact_pattern(exact_kws)
+    classify_records(records, exact_pattern)
+    n_exact    = sum(1 for r in records if r.get("_label") == "Yes_exact")
+    n_nonexact = sum(1 for r in records if r.get("_label") == "Yes_nonexact")
+    print(f"  Exact match: {n_exact}  /  Non-exact similar: {n_nonexact}")
 
     # ── Figure 1: CCDF ──────────────────────────────────────────
     _set_style_stats()

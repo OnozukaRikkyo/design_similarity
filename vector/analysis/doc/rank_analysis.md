@@ -1,13 +1,16 @@
 # ランク検索結果の統計分析・可視化 (`rank_analysis.py`)
 
-ベクトルランク検索結果（`compute_ranks.py` 出力）と LLM 類似判定（`qwen_similarity_results/`）を結合し、3 種の図を生成する。
+`join_judgments.py`（Step 3）が生成した `all.jsonl` を読み込み、`reason` フィールドのキーワードマッチで Yes ペアを **Exact match** / **Non-exact similar** に分類したうえで、3 種の図を生成する。
+
+**前提**: `join_judgments.py` の実行完了後に本スクリプトを実行すること。
+処理順序の全体像は [pipeline.md](pipeline.md) を参照。
 
 ---
 
 ## スクリプト
 
 ```
-/home/sonozuka/design_similarity/vector/analysis/rank_analysis.py
+vector/analysis/rank_analysis.py
 ```
 
 ---
@@ -47,16 +50,30 @@ vector/output/{CLASS}/{sim_func}/
 ## Figure 2: 順位 vs 類似度の散布図
 
 **横軸**: 順位 $r$  
-**縦軸**: コサイン類似度 $r_{\rm s}$
+**縦軸**: コサイン類似度
 
-| マーカー | 意味 |
-|---------|------|
-| 青●（Yes） | 期待値となる入力画像ペア（引用かつ LLM 類似判定） |
-| 赤×（No） | LLM 非類似判定の引用ペア |
-| 灰△（Unknown） | qwen 結果に対応なし |
-| 緑☆（Selected） | 代表ペア（Yes・信頼度 5 のうち中央値ランクに最近傍） |
+`judgment=Yes` のレコードは、`reason` テキストのキーワードマッチにより **Exact match** と **Similar, non-exact** に分類されてプロットされる。
 
-Yes 群は散布図の左上（低ランク・高類似度）に集中し、No 群は全域に分布する。
+| マーカー | 色 | 意味 |
+|---------|-----|------|
+| 赤×（Non-similar） | 赤 | LLM 非類似判定の引用ペア |
+| 灰△（Unknown） | グレー | Qwen 結果に対応なし |
+| 紫□ 中抜き（Exact match） | 紫 | Yes かつ reason に完全一致キーワードを含む |
+| 青◇ 中抜き（Similar, non-exact） | 青 | Yes かつ reason に完全一致キーワードを含まない |
+
+### Exact / Non-exact 分類ロジック
+
+```python
+FALLBACK_EXACT_KEYWORDS = ["identical", "exact", "same"]
+```
+
+`reason` 文字列に対して単語境界（`\b`）付き正規表現でいずれかがマッチすれば **Exact match**、しなければ **Non-exact**。`--use-llm` を付けると Qwen3-VL-4B-Instruct がキーワードを動的に取得する（詳細は [export_non_exact_pairs.md](export_non_exact_pairs.md) 参照）。
+
+### D18 perspective の観察（2026-05-19）
+
+- Exact match（102 件）は低ランク・高類似度（左上）に密集
+- Non-exact similar（7 件）はランク 5〜18 付近に散在し、類似度もやや低め
+- Exact match は類似度 ≥ 0.9 の領域で Non-similar と明確に分離できる
 
 ---
 
@@ -119,16 +136,16 @@ PRL（Physical Review Letters）シングルカラム準拠:
 ## 実行方法
 
 ```bash
-# D18（デフォルト）
+# D18（デフォルト、Qwen なし）
 python vector/analysis/rank_analysis.py --class D18
 
-# 別クラス
-python vector/analysis/rank_analysis.py --class D10
+# Qwen LLM でキーワードを動的取得
+python vector/analysis/rank_analysis.py --class D18 --use-llm
 
-# 画像タイプ指定
-python vector/analysis/rank_analysis.py --class D18 --type overview
+# 別クラス・画像タイプ指定
+python vector/analysis/rank_analysis.py --class D10 --type overview
 
-# Top-k を変更
+# ペア比較図の近傍数を変更
 python vector/analysis/rank_analysis.py --class D18 --top-k 15
 ```
 
@@ -138,13 +155,21 @@ python vector/analysis/rank_analysis.py --class D18 --top-k 15
 | `--sim` | `cosine_numpy` | 類似度関数 |
 | `--type` | `perspective` | 画像タイプ |
 | `--top-k` | `10` | ペア比較図の近傍数 |
+| `--use-llm` | False | Qwen でキーワード取得を有効化 |
 
 ---
 
 ## 前後の処理との関係
 
+```
+join_judgments.py  →  all.jsonl  →  rank_analysis.py  →  *.png（統計図）
+```
+
 | 前工程 | 本スクリプト | 後工程 |
 |--------|-------------|--------|
-| [compute_ranks.md](../../doc/compute_ranks.md) | `rank_analysis.py` | 論文図の使用 |
-| `rank_results/{sim_func}/{year}.jsonl` | → `vector/output/{CLASS}/{sim_func}/*.png` | |
-| `qwen_similarity_results/{year}.jsonl` | | |
+| `join_judgments.py`（Step 3） | `rank_analysis.py`（Step 4a） | 論文図の使用 |
+| `rank_judgments/{sim_func}/all.jsonl` | → `vector/output/{CLASS}/{sim_func}/*.png` | |
+
+同じ `all.jsonl` を入力とする並列実行可能なスクリプト:
+- `export_yes_reasons.py` — Yes ペア CSV（[pipeline.md](pipeline.md) Step 4b）
+- `export_non_exact_pairs.py` — Non-exact ペア画像（[export_non_exact_pairs.md](export_non_exact_pairs.md)）

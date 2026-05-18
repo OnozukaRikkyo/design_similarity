@@ -19,6 +19,7 @@ Yes 判定かつ類似度閾値以上のペアのうち、reason に「完全一
 実行:
     python vector/analysis/export_non_exact_pairs.py --class D18
     python vector/analysis/export_non_exact_pairs.py --class D18 --min-sim 0.9
+    python vector/analysis/export_non_exact_pairs.py --class D18 --use-llm   # Qwen 有効
 """
 
 import argparse
@@ -327,6 +328,8 @@ def main() -> None:
                         choices=["perspective", "front", "overview"])
     parser.add_argument("--min-sim", type=float, default=0.8,
                         help="コサイン類似度の下限（デフォルト: 0.8）")
+    parser.add_argument("--use-llm", action="store_true",
+                        help="Qwen LLM によるキーワード取得を有効にする（デフォルト: 無効）")
     args = parser.parse_args()
 
     print(f"対象クラス  : {args.target_class}")
@@ -341,10 +344,14 @@ def main() -> None:
     )
     print(f"Yes ペア（similarity >= {args.min_sim}）: {len(yes_recs)} 件")
 
-    # Step 2: LLM でキーワード取得
-    print("\nQuerying LLM for keywords (Qwen3-VL-4B-Instruct) ...")
-    reasons = [r["reason"] for r in yes_recs]
-    exact_kws, non_exact_kws = ask_llm_for_keywords(reasons)
+    # Step 2: キーワード取得
+    if args.use_llm:
+        print("\nQuerying LLM for keywords (Qwen3-VL-4B-Instruct) ...")
+        reasons = [r["reason"] for r in yes_recs]
+        exact_kws, non_exact_kws = ask_llm_for_keywords(reasons)
+    else:
+        print("\n[LLM スキップ] フォールバックキーワードを使用します（--use-llm で有効化）")
+        exact_kws, non_exact_kws = FALLBACK_EXACT_KEYWORDS, FALLBACK_NON_EXACT_KEYWORDS
     print(f"  exact_keywords     : {exact_kws}")
     print(f"  non_exact_keywords : {non_exact_kws}")
 
