@@ -70,8 +70,13 @@ D18 の場合、`rank_results/` と `cited_image_pairs/` はともに 2007〜202
 
 | 年 | rank_results | qwen_similarity_results | judgment |
 |----|:---:|:---:|:---:|
-| 2007〜2015 | あり | あり | Yes / No |
-| 2016〜2022 | あり | 処理中（0件〜） | Unknown → 順次更新 |
+| 2007〜2016 | あり | あり（完了） | Yes / No |
+| 2017 | あり | 処理中（途中） | 一部 Yes/No、残りは Unknown |
+| 2018〜2022 | あり | 未処理（0件） | Unknown |
+
+> **確認日: 2026-05-20**  
+> `judge_cited_pairs.py` が処理を進めるたびに `qwen_similarity_results/` が更新されるため、
+> 下記「更新手順」を実行するたびに最新の判定が `all.jsonl` に反映される。
 
 ---
 
@@ -110,6 +115,7 @@ done
 ### Step 2: all.jsonl を再生成（Step 5 を --no-resume で実行）
 
 ```bash
+cd /home/sonozuka/design_similarity
 python vector/run_pipeline.py --class D18 --steps 5 --no-resume
 ```
 
@@ -119,10 +125,23 @@ python vector/run_pipeline.py --class D18 --steps 5 --no-resume
 python vector/join_judgments.py --class D18 --no-resume
 ```
 
+> **ここまでで `all.jsonl`（データ出力）は完成。**  
 > Step 1〜4（ペア抽出・ベクトル生成・インデックス・ランク検索）は
 > `qwen_similarity_results/` と無関係なので実行不要。
 
-### Step 3: 分析・可視化を再実行
+#### Step 5 が行うこと（ステップバイステップ）
+
+1. `--no-resume` → 既存の `all.jsonl` があっても上書きする
+2. `rank_results/cosine_numpy/` にある全年の `.jsonl` を年順に列挙
+3. `qwen_similarity_results/{year}.jsonl` を全年メモリに読み込み `(source, target) → {judgment, confidence, reason}` の辞書を構築
+4. `class/D18/cited_image_pairs/{year}.jsonl` を全年メモリに読み込み `(source, target) → {source_images, target_images}` の辞書を構築
+5. ランク結果の各行に judgment / confidence / reason / source_image / target_image を付与して `all.jsonl` に書き出す
+
+> **注意:** `qwen_similarity_results/` に 0 件の年は `judgment=Unknown`、`confidence=0`、`reason=""` になる。壊れるわけではない。
+
+### Step 3: 図の生成（任意・データ出力には不要）
+
+`all.jsonl` を使って CCDF・散布図・ペア比較画像などを生成する場合のみ実行する。
 
 ```bash
 python vector/analysis/rank_analysis.py --class D18

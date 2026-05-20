@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.ticker as ticker
 import numpy as np
-from tqdm import tqdm
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from image_processor import ImageProcessor
@@ -101,25 +101,6 @@ def _set_style_stats() -> None:
 # ---------------------------------------------------------------------------
 # Matplotlib スタイル（画像グリッド図用、大きいフォント）
 # ---------------------------------------------------------------------------
-def _set_style_image() -> None:
-    plt.rcParams.update({
-        "font.family":         "serif",
-        "font.serif":          ["Times New Roman", "DejaVu Serif", "Palatino"],
-        "mathtext.fontset":    "stix",
-        "font.size":           12,
-        "axes.labelsize":      11,
-        "axes.titlesize":      12,
-        "xtick.labelsize":     10,
-        "ytick.labelsize":     10,
-        "axes.linewidth":      1.0,
-        "figure.dpi":          200,
-        "savefig.dpi":         200,
-        "savefig.bbox":        "tight",
-        "pdf.fonttype":        42,
-        "ps.fonttype":         42,
-    })
-
-
 # ---------------------------------------------------------------------------
 # ユーティリティ
 # ---------------------------------------------------------------------------
@@ -176,7 +157,7 @@ def plot_ccdf(records: list[dict], img_type: str, out_path: Path) -> None:
     ax.set_xlim(0.8, n_cand * 1.5)
     ax.set_ylim(5e-3, 2.0)
 
-    ax.set_xlabel("Rank $r$")
+    ax.set_xlabel("Rank")
     ax.set_ylabel(r"$P(\mathrm{rank} \geq r)$")
     ax.set_title(
         f"Rank CCDF of cited design patent pairs "
@@ -207,40 +188,33 @@ def plot_scatter(
 
     n_cand = records[0]["n_candidates"]
 
-    n_exact    = sum(1 for r in records if r.get("_label") == "Yes_exact")
-    n_nonexact = sum(1 for r in records if r.get("_label") == "Yes_nonexact")
-    n_no       = sum(1 for r in records if r["judgment"] == "No")
-    n_unknown  = sum(1 for r in records if r["judgment"] == "Unknown")
+    n_yes     = sum(1 for r in records if r["judgment"] == "Yes")
+    n_no      = sum(1 for r in records if r["judgment"] == "No")
+    n_unknown = sum(1 for r in records if r["judgment"] == "Unknown")
 
-    # プロット順: No → Unknown → Yes_nonexact → Yes_exact（exact が最前面）
     layers = [
-        ("No",           "#d62728", "x",  18,  0.5, f"Non-similar ($n={n_no}$)"),
-        ("Unknown",      "#aaaaaa", "^",   9,  0.4, f"Unknown ($n={n_unknown}$)"),
-        ("Yes_nonexact", "#1f77b4", "D",  10,  0.8, f"Similar, non-exact ($n={n_nonexact}$)"),
-        ("Yes_exact",    "#7b2d8b", "s",  14,  0.9, f"Exact match ($n={n_exact}$)"),
+        ("No",      "#d62728", "x",  18,  0.5, f"Non-similar ($n={n_no}$)"),
+        ("Yes",     "#1f77b4", "D",  10,  0.8, f"Similar ($n={n_yes}$)"),
+        ("Unknown", "#aaaaaa", "^",   9,  0.4, f"Unknown ($n={n_unknown}$)"),
     ]
 
     for label, color, marker, size, lw, leg in layers:
-        recs = [r for r in records if r.get("_label", r["judgment"]) == label]
+        recs = [r for r in records if r["judgment"] == label]
         if not recs:
             continue
         x = np.array([r["rank"] for r in recs])
         y = np.array([r["similarity"] for r in recs])
 
-        zorder = {"No": 2, "Unknown": 1, "Yes_nonexact": 3, "Yes_exact": 4}[label]
+        zorder = {"No": 2, "Unknown": 1, "Yes": 3}[label]
         if marker == "x":
             ax.scatter(x, y, c=color, marker=marker, s=size,
                        linewidths=lw, label=leg, zorder=zorder, alpha=0.6)
-        elif label == "Yes_exact":
-            ax.scatter(x, y, facecolors="none", edgecolors=color,
-                       marker=marker, s=size,
-                       linewidths=lw, label=leg, zorder=zorder, alpha=0.9)
         else:
             ax.scatter(x, y, facecolors="none", edgecolors=color,
                        marker=marker, s=size,
                        linewidths=lw, label=leg, zorder=zorder, alpha=0.85)
 
-    ax.set_xlabel("Rank $r$")
+    ax.set_xlabel("Rank")
     ax.set_ylabel("Cosine similarity")
     ax.set_xlim(xlim if xlim is not None else (-5, n_cand + 10))
     ax.set_ylim(ylim if ylim is not None else (0.38, 1.02))
@@ -455,21 +429,21 @@ def main() -> None:
     cnt = Counter(r["judgment"] for r in records)
     print(f"  {len(records)} records  Yes={cnt['Yes']}  No={cnt['No']}  Unknown={cnt.get('Unknown',0)}")
 
-    # ── Yes レコードを exact / non-exact に分類 ─────────────────
-    if args.use_llm:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from export_non_exact_pairs import ask_llm_for_keywords
-        yes_reasons = [r["reason"] for r in records if r["judgment"] == "Yes"]
-        print("\nQuerying Qwen for exact-match keywords ...")
-        exact_kws, _ = ask_llm_for_keywords(yes_reasons)
-    else:
-        exact_kws = FALLBACK_EXACT_KEYWORDS
-        print(f"\n[LLM スキップ] exact keywords: {exact_kws}  (--use-llm で有効化)")
-    exact_pattern = build_exact_pattern(exact_kws)
-    classify_records(records, exact_pattern)
-    n_exact    = sum(1 for r in records if r.get("_label") == "Yes_exact")
-    n_nonexact = sum(1 for r in records if r.get("_label") == "Yes_nonexact")
-    print(f"  Exact match: {n_exact}  /  Non-exact similar: {n_nonexact}")
+    # # ── Yes レコードを exact / non-exact に分類 ─────────────────
+    # if args.use_llm:
+    #     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    #     from export_non_exact_pairs import ask_llm_for_keywords
+    #     yes_reasons = [r["reason"] for r in records if r["judgment"] == "Yes"]
+    #     print("\nQuerying Qwen for exact-match keywords ...")
+    #     exact_kws, _ = ask_llm_for_keywords(yes_reasons)
+    # else:
+    #     exact_kws = FALLBACK_EXACT_KEYWORDS
+    #     print(f"\n[LLM スキップ] exact keywords: {exact_kws}  (--use-llm で有効化)")
+    # exact_pattern = build_exact_pattern(exact_kws)
+    # classify_records(records, exact_pattern)
+    # n_exact    = sum(1 for r in records if r.get("_label") == "Yes_exact")
+    # n_nonexact = sum(1 for r in records if r.get("_label") == "Yes_nonexact")
+    # print(f"  Exact match: {n_exact}  /  Non-exact similar: {n_nonexact}")
 
     # ── Figure 1: CCDF ──────────────────────────────────────────
     _set_style_stats()
@@ -492,35 +466,34 @@ def main() -> None:
                  xlim=(-0.5, 21),
                  ylim=(0.84, 1.02))
 
-    # ── Figure 3: ペア比較画像（Yes & rank <= top_k） ──────────
-    print(f"[3/3] Plotting pair comparison images (Yes, rank <= {args.top_k})...")
-    _set_style_image()
+    # # ── Figure 3: ペア比較画像（Yes & rank <= top_k） ──────────
+    # print(f"[3/3] Plotting pair comparison images (Yes, rank <= {args.top_k})...")
+    # _set_style_image()
 
-    yes_topk = [
-        r for r in records
-        if r["judgment"] == "Yes" and r["rank"] <= args.top_k
-    ]
-    yes_topk.sort(key=lambda r: r["rank"])
-    print(f"  対象: {len(yes_topk)} 件")
+    # yes_topk = [
+    #     r for r in records
+    #     if r["judgment"] == "Yes" and r["rank"] <= args.top_k
+    # ]
+    # yes_topk.sort(key=lambda r: r["rank"])
+    # print(f"  対象: {len(yes_topk)} 件")
 
-    out_img = (
-        CLASS_BASE / args.target_class
-        / "rank_analysis" / args.sim / args.img_type
-        / "pair_comparison"
-    )
+    # out_img = (
+    #     CLASS_BASE / args.target_class
+    #     / "rank_analysis" / args.sim / args.img_type
+    #     / "pair_comparison"
+    # )
 
-    for rec in tqdm(yes_topk, desc="pair images", unit="件"):
-        top10 = get_topk(rec["source"], args.img_type,
-                         args.target_class, k=args.top_k)
-        fname = (
-            f"{rec['source']}--{rec['target']}"
-            f"_rank{rec['rank']:03d}.png"
-        )
-        plot_pair_comparison(rec, top10, out_img / fname)
+    # for rec in tqdm(yes_topk, desc="pair images", unit="件"):
+    #     top10 = get_topk(rec["source"], args.img_type,
+    #                      args.target_class, k=args.top_k)
+    #     fname = (
+    #         f"{rec['source']}--{rec['target']}"
+    #         f"_rank{rec['rank']:03d}.png"
+    #     )
+    #     plot_pair_comparison(rec, top10, out_img / fname)
 
     print(f"\n完了")
     print(f"  統計図: {out_stats}")
-    print(f"  ペア画像: {out_img}")
 
 
 if __name__ == "__main__":

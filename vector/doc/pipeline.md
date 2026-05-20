@@ -323,17 +323,20 @@ for f in /mnt/eightthdd/uspto/qwen_similarity_results/*.jsonl; do
 done
 # 0件の年は judgment=Unknown になる（処理未完了）
 
-# Step 2: all.jsonl を再生成（Step 5 を --no-resume で実行）
+# Step 2: all.jsonl を再生成（Step 5 を --no-resume で実行）← データ出力はここまで
+cd /home/sonozuka/design_similarity
 python vector/run_pipeline.py --class ${CLASS} --steps 5 --no-resume
 
-# Step 3: 分析・可視化を再実行
+# Step 3: 図の生成（任意・データ出力には不要）
 python vector/analysis/rank_analysis.py --class ${CLASS}
 python vector/analysis/export_yes_reasons.py --class ${CLASS}
 python vector/analysis/export_non_exact_pairs.py --class ${CLASS}
 ```
 
-> **ポイント:** Step 1〜4（ペア抽出・ベクトル生成・インデックス・ランク検索）は
-> `qwen_similarity_results/` と無関係。変更不要。
+> **ポイント:**
+> - Step 1〜4（ペア抽出・ベクトル生成・インデックス・ランク検索）は `qwen_similarity_results/` と無関係。変更不要。
+> - Step 2 の完了で `all.jsonl`（データ出力）が最新化される。Step 3 は図の生成のみ。
+> - `qwen_similarity_results/` が 0 件の年は `judgment=Unknown` になるが処理は正常に完了する。
 
 詳細: [join_judgments.md](join_judgments.md)
 
