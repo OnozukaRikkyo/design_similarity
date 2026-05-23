@@ -50,12 +50,14 @@ rank_results/{sim_func}/{year}.jsonl
 
 ```json
 {
-  "source":       "D0550278",
-  "target":       "D0550759",
-  "type":         "perspective",
-  "rank":         5,
-  "n_candidates": 456,
-  "similarity":   0.873421
+  "source":        "D0550278",
+  "target":        "D0550759",
+  "type":          "perspective",
+  "rank":          5,
+  "n_candidates":  958,
+  "similarity":    0.873421,
+  "source_image":  "/mnt/.../USD0550278-20070123-D00000.TIF",
+  "target_image":  "/mnt/.../USD0550759-20070220-D00000.TIF"
 }
 ```
 
@@ -69,6 +71,8 @@ rank_results/{sim_func}/{year}.jsonl
 | `rank` | int | A で検索したときの B の順位（1-indexed、1 が最も類似） |
 | `n_candidates` | int | 候補数（= インデックス全件 − 1）|
 | `similarity` | float | A–B 間のコサイン類似度（小数点以下 6 桁） |
+| `source_image` | string \| null | A の当該タイプ画像パス（`cited_image_pairs` より引き継ぎ） |
+| `target_image` | string \| null | B の当該タイプ画像パス（同上） |
 
 ### 順位の解釈
 
@@ -140,17 +144,17 @@ python compute_ranks.py --class D18 --no-resume
 
 ---
 
-## D18 の実行結果（2026-05-18 時点）
+## D18 の実行結果（2026-05-23 時点）
 
-総レコード数: 634 件（`cosine_numpy`、各ペア 1 タイプ = 1 レコード）
+総レコード数: 1,530 件（`cosine_numpy`、各ペア 1 タイプ = 1 レコード）
 
 | タイプ | レコード数 | n_candidates | rank 中央値 | 百分位中央値 | rank=1 割合 |
 |--------|----------:|-------------:|------------:|------------:|------------:|
-| perspective | 584 | 456 | 22.0 | 0.048 | 0.146 |
-| overview | 47 | 31 | 5.0 | 0.161 | 0.106 |
-| front | 3 | 5 | 1.0 | 0.200 | 1.000 |
+| perspective | 1,447 | 958 | — | — | — |
+| overview | 74 | 58 | — | — | — |
+| front | 9 | 11 | — | — | — |
 
-perspective の百分位中央値 0.048 は、引用された意匠特許ペアが上位 5% 程度に類似することを示す。
+> **注意（旧値）**: 2026-05-18 時点のデータは perspective の 2007〜2014 年分が旧インデックス（n_candidates=456）で計算されており、2015〜2022 年分（n_candidates=958）と混在していた。2026-05-23 に全年を `--no-resume` で再計算し統一済み。
 
 ---
 

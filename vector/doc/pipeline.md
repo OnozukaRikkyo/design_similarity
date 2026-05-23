@@ -74,10 +74,14 @@
   rank_results/
     {sim_func}/                       ← cosine_numpy / cosine_faiss
       {year}.jsonl                    ← 1行 = 1 (ペア×タイプ) レコード
+                                         フィールド: source, target, type, rank,
+                                                     n_candidates, similarity,
+                                                     source_image, target_image
 
         ↓ Step 5: join_judgments.py --class {CLASS} --sim {sim_func}
-          （ランク結果・LLM 判定・画像パスを結合して一括保存）
+          （ランク結果・LLM 判定を結合して一括保存）
           ※ LLM 判定は qwen_similarity_results/{year}.jsonl から取得
+          ※ 画像パスは rank_results から引き継ぐ（cited_image_pairs を再読み込みしない）
           ※ qwen_similarity_results/ は run_pipeline.py 外の judge_cited_pairs.py が生成
 
   rank_judgments/
@@ -398,3 +402,12 @@ cd /home/sonozuka/image_vector
 | `cited_image_pairs/{year}.jsonl` | `extract_cited_image_pairs.py` | `design_similarity/` | 不要 |
 | `edge_list_with_class/{year}.csv` | `add_class_to_edge_list.py` | `design_similarity/` | 不要 |
 | `cited_image_vectors/{type}/` | `build_cited_image_vectors.py` | `/home/sonozuka/image_vector/` | **必須** |
+
+---
+
+## 関連ドキュメント
+
+本ファイルはベクトル検索パイプライン（Step 1〜5）のみを扱う。  
+上流・分析・PMS パイプラインとの全体的な関係は以下を参照。
+
+- [**../../doc/architecture.md**](../../doc/architecture.md) — 全パイプラインの設計・接続点・ストレージ構成

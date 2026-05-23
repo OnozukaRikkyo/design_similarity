@@ -220,12 +220,14 @@ def process_year(
                     src_row, tgt_row
                 )
                 out_rec = {
-                    "source":       rec["source"],
-                    "target":       rec["target"],
-                    "type":         img_type,
-                    "rank":         rank,
-                    "n_candidates": n_cand,
-                    "similarity":   round(sim, 6),
+                    "source":        rec["source"],
+                    "target":        rec["target"],
+                    "type":          img_type,
+                    "rank":          rank,
+                    "n_candidates":  n_cand,
+                    "similarity":    round(sim, 6),
+                    "source_image":  rec.get("source_images", {}).get(img_type),
+                    "target_image":  rec.get("target_images", {}).get(img_type),
                 }
                 fout.write(json.dumps(out_rec, ensure_ascii=False) + "\n")
                 n_written += 1

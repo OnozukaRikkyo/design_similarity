@@ -9,13 +9,12 @@
 
 ## 入出力
 
-### 入力（3 つ）
+### 入力（2 つ）
 
 | ディレクトリ | 内容 | 生成元 |
 |---|---|---|
-| `class/{CLASS}/rank_results/{sym_func}/{year}.jsonl` | ベクトルランク検索結果 | Step 4: `compute_ranks.py` |
+| `class/{CLASS}/rank_results/{sim_func}/{year}.jsonl` | ベクトルランク検索結果（画像パス含む） | Step 4: `compute_ranks.py` |
 | `qwen_similarity_results/{year}.jsonl` | LLM 類似判定（Yes/No） | `judge_cited_pairs.py`（外部） |
-| `class/{CLASS}/cited_image_pairs/{year}.jsonl` | 画像パス取得用 | Step 1: `filter_pairs_by_class.py` |
 
 ### 出力
 
@@ -53,18 +52,21 @@ qwen_similarity_results/{year}.jsonl  → join_judgments.py が参照
 ```
 
 **重要:** `class/{CLASS}/cited_image_pairs/{year}.jsonl` には Yes/No 情報は含まれない。
-フィールドは `source`・`target`・`source_images`・`target_images`・`events`・`source_class`・`target_class` のみ。
 Yes/No 判定は `judge_cited_pairs.py` による画像比較によって初めて付与される。
 
 `judge_cited_pairs.py` は全クラス混在の `cited_image_pairs/` を処理するため、
 D18 以外のペアも含む大量の判定を実行する（1 年あたり数千〜1 万件以上）。
+
+**画像パスについて:** `source_image`/`target_image` は `compute_ranks.py`（Step 4）が
+`cited_image_pairs` から引き継いで `rank_results` に出力する。`join_judgments.py` は
+`rank_results` からそのまま引き継ぐため、`cited_image_pairs` を再度読み込まない。
 
 ---
 
 ## データの対象年
 
 `join_judgments.py` は `rank_results/` に存在する全年を対象とする。
-D18 の場合、`rank_results/` と `cited_image_pairs/` はともに 2007〜2022 の 16 年分が存在する。
+D18 の場合、`rank_results/` は 2007〜2022 の 16 年分が存在する。
 
 `qwen_similarity_results/` の整備状況により `judgment` の付与状況が変わる:
 
@@ -134,8 +136,8 @@ python vector/join_judgments.py --class D18 --no-resume
 1. `--no-resume` → 既存の `all.jsonl` があっても上書きする
 2. `rank_results/cosine_numpy/` にある全年の `.jsonl` を年順に列挙
 3. `qwen_similarity_results/{year}.jsonl` を全年メモリに読み込み `(source, target) → {judgment, confidence, reason}` の辞書を構築
-4. `class/D18/cited_image_pairs/{year}.jsonl` を全年メモリに読み込み `(source, target) → {source_images, target_images}` の辞書を構築
-5. ランク結果の各行に judgment / confidence / reason / source_image / target_image を付与して `all.jsonl` に書き出す
+4. ランク結果の各行に judgment / confidence / reason を付与して `all.jsonl` に書き出す
+   （source_image / target_image は rank_results にすでに含まれるためそのまま引き継ぐ）
 
 > **注意:** `qwen_similarity_results/` に 0 件の年は `judgment=Unknown`、`confidence=0`、`reason=""` になる。壊れるわけではない。
 

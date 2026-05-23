@@ -453,3 +453,12 @@ python visualize_ergm_network.py --sim-dir /mnt/eightthdd/uspto/yes_pair/qwen  #
 ```
 
 各スクリプトは年単位で指定年のみ処理することも可能（`extract_yes_pairs.py` を除く）。詳細は各 .md ファイルの「実行方法」節を参照。
+
+---
+
+## 関連ドキュメント
+
+本ファイルは**上流パイプライン**（エッジ構築〜 LLM 判定）のみを扱う。  
+ベクトル検索・分析・PMS パイプラインとの全体的な関係は以下を参照。
+
+- [**architecture.md**](architecture.md) — 全パイプラインの設計・接続点・ストレージ構成

@@ -6,7 +6,6 @@
 
 入力:
     class/{CLASS}/rank_results/{sim_func}/{year}.jsonl
-    class/{CLASS}/cited_image_pairs/{year}.jsonl   (画像パス取得用)
     qwen_similarity_results/{year}.jsonl            (LLM 判定)
 
 出力:
@@ -49,29 +48,6 @@ def load_qwen(years: list[str]) -> dict[tuple[str, str], dict]:
     return lookup
 
 
-def load_pair_images(
-    target_class: str, years: list[str]
-) -> dict[tuple[str, str], dict[str, dict[str, str]]]:
-    """
-    cited_image_pairs から (source, target) → {source_images, target_images} を返す。
-    source_images / target_images は {type: path} 形式。
-    """
-    pairs_dir = CLASS_BASE / target_class / "cited_image_pairs"
-    lookup: dict[tuple[str, str], dict[str, dict[str, str]]] = {}
-    for year in years:
-        fp = pairs_dir / f"{year}.jsonl"
-        if not fp.exists():
-            continue
-        for line in fp.read_text().splitlines():
-            if line.strip():
-                p = json.loads(line)
-                key = (p["source"], p["target"])
-                lookup[key] = {
-                    "source_images": p.get("source_images", {}),
-                    "target_images": p.get("target_images", {}),
-                }
-    return lookup
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -107,10 +83,6 @@ def main() -> None:
     qwen = load_qwen(years)
     print(f"  {len(qwen):,} 件")
 
-    print("Loading pair image paths...")
-    pair_images = load_pair_images(args.target_class, years)
-    print(f"  {len(pair_images):,} ペア")
-
     out_dir.mkdir(parents=True, exist_ok=True)
 
     n_total = n_yes = n_no = n_unk = 0
@@ -128,10 +100,9 @@ def main() -> None:
                 r["confidence"] = q.get("confidence", 0) if q else 0
                 r["reason"]     = q.get("reason", "") if q else ""
 
-                # 画像パス（cited_image_pairs を優先参照）
-                imgs = pair_images.get(key, {})
-                r["source_image"] = imgs.get("source_images", {}).get(r["type"])
-                r["target_image"] = imgs.get("target_images", {}).get(r["type"])
+                # 画像パス（rank_results から引き継ぎ）
+                r["source_image"] = r.get("source_image")
+                r["target_image"] = r.get("target_image")
 
                 fout.write(json.dumps(r, ensure_ascii=False) + "\n")
 

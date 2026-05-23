@@ -63,12 +63,11 @@ class/{CLASS}/rank_results/{sim_func}/{year}.jsonl
 ### Step 3: 結合（`join_judgments.py`）
 
 Step 1 のランク結果と Step 2 の LLM 判定を `(source, target)` キーで結合。
-画像パスを `cited_image_pairs/{year}.jsonl` から付与する。
+画像パスは `rank_results` の `source_image`/`target_image` フィールドからそのまま引き継ぐ。
 
 **入力:**
 ```
-class/{CLASS}/rank_results/{sim_func}/{year}.jsonl
-class/{CLASS}/cited_image_pairs/{year}.jsonl
+class/{CLASS}/rank_results/{sim_func}/{year}.jsonl   ← rank・similarity・画像パスを含む
 /mnt/eightthdd/uspto/qwen_similarity_results/{year}.jsonl
 ```
 
