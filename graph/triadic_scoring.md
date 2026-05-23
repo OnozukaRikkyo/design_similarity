@@ -135,6 +135,25 @@ $$\mathrm{Confidence} = 0.30 \cdot S_1 + 0.30 \cdot S_2 + 0.25 \cdot S_3 + 0.15 
 
 ---
 
+## rank の決定アルゴリズム
+
+`rank` は **confidence（加重和）の降順順位**である。
+
+```python
+scored.sort(key=lambda r: -r['confidence'])   # confidence 降順ソート
+for rank, r in enumerate(scored, 1):          # 1 始まりで順位を付与
+    ...
+```
+
+$$\text{rank} = \text{confidence 降順での順番}$$
+
+- rank = 1 : confidence 最大（D18: 0.9298）
+- rank = 1593 : confidence 最小（D18: 0.3440）
+
+**タイブレーク**: Python の `list.sort()` は安定ソートのため、confidence が同値の場合は `enumerate_triangles()` が返す辞書順（特許 ID の A → B → C 昇順）が保持される。D18 データでは完全同値の triad は存在せず、実質的に confidence のみで順位が決まる。
+
+---
+
 ## 実装
 
 `graph/graph_analysis.py`
