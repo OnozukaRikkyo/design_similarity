@@ -160,15 +160,10 @@ def plot_ccdf(records: list[dict], img_type: str, out_path: Path) -> None:
 
     ax.set_xlabel("Rank")
     ax.set_ylabel(r"$P(\mathrm{rank} \geq r)$")
-    ax.set_title(
-        f"Rank CCDF of cited design patent pairs "
-        f"(D18, {img_type})",
-        pad=4,
-    )
 
     ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
     ax.yaxis.set_major_formatter(ticker.ScalarFormatter())
-    ax.legend(fontsize=7.5, framealpha=0.85, edgecolor="gray", loc="upper right")
+    ax.legend(fontsize=7.5, framealpha=0.85, edgecolor="gray", loc="lower left")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
@@ -200,6 +195,128 @@ def export_high_sim_csv(
         writer.writerows(filtered)
     excl = f", exclude={exclude_judgments}" if exclude_judgments else ""
     print(f"  {len(filtered)} 件 (similarity >= {sim_threshold}{excl}) -> {out_path}")
+
+# ---------------------------------------------------------------------------
+# Figure 2-density: 2D density map（物理学論文スタイル）
+# ---------------------------------------------------------------------------
+def plot_density_map(
+    records: list[dict],
+    img_type: str,
+    out_path: Path,
+    n_grid: int = 300,
+    xlim: tuple[float, float] | None = None,
+    ylim: tuple[float, float] | None = None,
+    log_x: bool = False,
+    log_color: bool = False,
+) -> None:
+    """
+    Rank vs cosine similarity の2次元PDF（gaussian_kde）。
+    contourf + contour lines で表示。PRL シングルカラム準拠。
+    xlim/ylim を指定するとその範囲のデータのみで KDE を再推定してズーム表示。
+    log_x=True で rank 軸を対数スケール、log_color=True でカラーを対数スケール。
+    """
+    from scipy.stats import gaussian_kde
+    from matplotlib.colors import LogNorm
+
+    fig, ax = plt.subplots(figsize=(COLUMN_W, 2.8))
+
+    n_cand = records[0]["n_candidates"]
+
+    all_ranks = np.array([r["rank"] for r in records], dtype=float)
+    all_sims  = np.array([r["similarity"] for r in records], dtype=float)
+
+    # zoom 指定があればその範囲のデータのみ使用
+    if xlim is not None or ylim is not None:
+        mask = np.ones(len(all_ranks), dtype=bool)
+        if xlim is not None:
+            mask &= (all_ranks >= xlim[0]) & (all_ranks <= xlim[1])
+        if ylim is not None:
+            mask &= (all_sims >= ylim[0]) & (all_sims <= ylim[1])
+        all_ranks = all_ranks[mask]
+        all_sims  = all_sims[mask]
+
+    sim_lo,  sim_hi  = (ylim if ylim is not None else (0.38, 1.01))
+    rank_lo, rank_hi = (xlim if xlim is not None else (1.0, float(n_cand) + 0.5))
+
+    # 2次元KDE（スケールを正規化してからKDE計算）
+    rx = (all_ranks - rank_lo) / (rank_hi - rank_lo)
+    ry = (all_sims  - sim_lo)  / (sim_hi  - sim_lo)
+    kde = gaussian_kde(np.vstack([rx, ry]), bw_method="scott")
+
+    # X軸グリッド：log_x なら対数間隔
+    if log_x:
+        xg = np.logspace(np.log10(max(rank_lo, 1)), np.log10(rank_hi), n_grid)
+    else:
+        xg = np.linspace(rank_lo, rank_hi, n_grid)
+    yg = np.linspace(sim_lo, sim_hi, n_grid)
+
+    XX, YY = np.meshgrid(xg, yg)
+    rxg = (XX - rank_lo) / (rank_hi - rank_lo)
+    ryg = (YY - sim_lo)  / (sim_hi  - sim_lo)
+    ZZ = kde(np.vstack([rxg.ravel(), ryg.ravel()])).reshape(XX.shape)
+    ZZ /= ZZ.max()
+
+    # カラースケール設定
+    p_min = 0.02
+    if log_color:
+        norm         = LogNorm(vmin=p_min, vmax=1.0)
+        levels_fill  = np.logspace(np.log10(p_min), 0, 25)
+        cbar_ticks   = [0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
+    else:
+        norm         = None
+        levels_fill  = np.linspace(p_min, 1.0, 20)
+        cbar_ticks   = [0.2, 0.4, 0.6, 0.8, 1.0]
+
+    cf = ax.contourf(XX, YY, ZZ, levels=levels_fill,
+                     cmap="Reds", norm=norm, extend="neither", zorder=1)
+    ax.contour(
+        XX, YY, ZZ,
+        levels=[0.05, 0.2, 0.5, 0.8],
+        colors="k", linewidths=0.5, alpha=0.55, zorder=2,
+    )
+
+    cbar = fig.colorbar(cf, ax=ax, pad=0.02, fraction=0.046, ticks=cbar_ticks)
+    cbar.set_label(r"$p\,(\mathrm{Rank,\ Cosine\ Similarity})$", fontsize=8, labelpad=4)
+    cbar.ax.tick_params(labelsize=7)
+    if log_color:
+        cbar.ax.yaxis.set_major_formatter(ticker.LogFormatterSciNotation(base=10))
+
+    # Similar（Yes）点をオーバーレイ
+    yes_recs = [r for r in records if r["judgment"] == "Yes"]
+    if yes_recs:
+        xyes = np.array([r["rank"] for r in yes_recs])
+        yyes = np.array([r["similarity"] for r in yes_recs])
+        ax.scatter(
+            xyes, yyes,
+            facecolors="none", edgecolors="#1f77b4",
+            marker="D", s=8, linewidths=0.6,
+            label=f"Similar ($n={len(yes_recs)}$)",
+            zorder=4, alpha=0.85,
+        )
+
+    n_all = len(records)
+    ax.text(0.97, 0.97, f"$N = {n_all}$",
+            transform=ax.transAxes, ha="right", va="top", fontsize=7.5)
+
+    ax.set_xlabel("Rank")
+    ax.set_ylabel("Cosine similarity")
+    if log_x:
+        ax.set_xscale("log")
+        ax.set_xlim(rank_lo * 0.85, rank_hi)
+        ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
+    else:
+        ax.set_xlim(rank_lo, rank_hi)
+        ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(5))
+    ax.set_ylim(sim_lo, sim_hi)
+    ax.yaxis.set_minor_locator(ticker.AutoMinorLocator(4))
+    ax.legend(fontsize=7, framealpha=0.85, edgecolor="gray",
+              loc="lower left", markerscale=1.2)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path)
+    plt.close(fig)
+    print(f"  -> {out_path}")
+
 
 # ---------------------------------------------------------------------------
 # Figure 2: Scatter（全件、中ぬきマーカー）
@@ -485,6 +602,32 @@ def main() -> None:
     print("[2/3] Plotting scatter...")
     plot_scatter(records, args.img_type,
                  out_stats / f"rank_scatter_{args.img_type}.png")
+
+    # ── Figure 2d: 2D density map ───────────────────────────────
+    print("[2d] Plotting 2D density map...")
+    plot_density_map(records, args.img_type,
+                     out_stats / f"rank_density_{args.img_type}.png")
+
+    # ── Figure 2d zoom ──────────────────────────────────────────
+    print("[2d-zoom] Plotting 2D density map (zoom)...")
+    plot_density_map(records, args.img_type,
+                     out_stats / f"rank_density_{args.img_type}_zoom.png",
+                     xlim=(0.5, 20.5),
+                     ylim=(0.84, 1.01))
+
+    # ── Figure 2d log-log ───────────────────────────────────────
+    print("[2d-loglog] Plotting 2D density map (log rank)...")
+    plot_density_map(records, args.img_type,
+                     out_stats / f"rank_density_{args.img_type}_loglog.png",
+                     ylim=(0.60, 1.01),
+                     log_x=True, log_color=False)
+
+    # ── Figure 2d log-log zoom ──────────────────────────────────
+    print("[2d-loglog-zoom] Plotting 2D density map (log rank + log color, zoom)...")
+    plot_density_map(records, args.img_type,
+                     out_stats / f"rank_density_{args.img_type}_loglog_zoom.png",
+                     xlim=(1.0, 20.5), ylim=(0.84, 1.01),
+                     log_x=True, log_color=True)
 
     # ── Figure 2b: Scatter（拡大: rank ≤ 20, similarity ≥ 0.85） ──
     print("[2b] Plotting scatter (zoom)...")
