@@ -19,10 +19,12 @@ vector/analysis/rank_analysis.py
 
 ```
 vector/output/{CLASS}/{sim_func}/
-  rank_ccdf_{type}.png          — Figure 1: 順位の CCDF
-  rank_scatter_{type}.png       — Figure 2: 順位 vs 類似度の散布図
+  rank_ccdf_{type}.png              — Figure 1: 順位の CCDF
+  rank_scatter_{type}.png           — Figure 2: 順位 vs 類似度の散布図
+  rank_scatter_{type}_zoom.png      — Figure 2b: 散布図拡大（rank ≤ 20, sim ≥ 0.85）
+  high_sim_{type}_0950.csv          — 高類似度レコード（similarity ≥ 0.950）
   pair_comparison/
-    {src}--{tgt}_{type}_top10.png — Figure 3: ベースペア + Top-10 近傍グリッド
+    {src}--{tgt}_{type}_top10.png   — Figure 3: ベースペア + Top-10 近傍グリッド
 ```
 
 ---
@@ -74,6 +76,31 @@ FALLBACK_EXACT_KEYWORDS = ["identical", "exact", "same"]
 - Exact match（102 件）は低ランク・高類似度（左上）に密集
 - Non-exact similar（7 件）はランク 5〜18 付近に散在し、類似度もやや低め
 - Exact match は類似度 ≥ 0.9 の領域で Non-similar と明確に分離できる
+
+---
+
+## CSV エクスポート: 高類似度レコード（`export_high_sim_csv`）
+
+`similarity >= 0.950` のレコードを類似度降順でソートし CSV に出力する。
+
+**出力列:**
+
+| 列名 | 内容 |
+|------|------|
+| `source` | クエリ特許番号 |
+| `target` | 引用対象特許番号 |
+| `rank` | コサイン類似度ランク |
+| `n_candidates` | 候補数 |
+| `similarity` | コサイン類似度 |
+| `judgment` | LLM 判定（Yes / No / Unknown） |
+| `confidence` | 信頼度（1〜5） |
+| `reason` | LLM が判定した理由テキスト |
+| `source_image` | クエリ画像ファイルパス |
+| `target_image` | 引用対象画像ファイルパス |
+
+**D18 perspective の結果（2026-05-20）:**
+
+- 該当件数: **370 件** / 1447 件中
 
 ---
 
@@ -147,6 +174,15 @@ python vector/analysis/rank_analysis.py --class D10 --type overview
 
 # ペア比較図の近傍数を変更
 python vector/analysis/rank_analysis.py --class D18 --top-k 15
+```
+
+実行時の処理順序:
+
+```
+[1/3] CCDF プロット          → rank_ccdf_{type}.png
+[2/3] Scatter プロット        → rank_scatter_{type}.png
+[2b]  Scatter 拡大プロット    → rank_scatter_{type}_zoom.png
+[3/3] 高類似度 CSV エクスポート → high_sim_{type}_0950.csv
 ```
 
 | オプション | デフォルト | 説明 |

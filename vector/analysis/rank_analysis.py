@@ -18,6 +18,7 @@
 """
 
 import argparse
+import csv
 import json
 import re
 import sys
@@ -173,6 +174,32 @@ def plot_ccdf(records: list[dict], img_type: str, out_path: Path) -> None:
     fig.savefig(out_path)
     plt.close(fig)
     print(f"  -> {out_path}")
+
+# ---------------------------------------------------------------------------
+# CSV エクスポート: 高類似度レコード
+# ---------------------------------------------------------------------------
+def export_high_sim_csv(
+    records: list[dict],
+    out_path: Path,
+    sim_threshold: float = 0.950,
+    exclude_judgments: list[str] | None = None,
+) -> None:
+    filtered = [r for r in records if r.get("similarity", 0) >= sim_threshold]
+    if exclude_judgments:
+        filtered = [r for r in filtered if r.get("judgment") not in exclude_judgments]
+    filtered.sort(key=lambda r: r["similarity"], reverse=True)
+
+    fields = [
+        "source", "target", "rank", "n_candidates", "similarity",
+        "judgment", "confidence", "reason", "source_image", "target_image",
+    ]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(filtered)
+    excl = f", exclude={exclude_judgments}" if exclude_judgments else ""
+    print(f"  {len(filtered)} 件 (similarity >= {sim_threshold}{excl}) -> {out_path}")
 
 # ---------------------------------------------------------------------------
 # Figure 2: Scatter（全件、中ぬきマーカー）
@@ -491,6 +518,20 @@ def main() -> None:
     #         f"_rank{rec['rank']:03d}.png"
     #     )
     #     plot_pair_comparison(rec, top10, out_img / fname)
+
+    # ── CSV: 高類似度レコード（similarity ≥ 0.950） ─────────────────
+    print("[3/3] Exporting high-similarity CSV (>= 0.950)...")
+    export_high_sim_csv(
+        records,
+        out_stats / f"high_sim_{args.img_type}_0950.csv",
+        sim_threshold=0.950,
+    )
+    export_high_sim_csv(
+        records,
+        out_stats / f"high_sim_{args.img_type}_0950_judged.csv",
+        sim_threshold=0.950,
+        exclude_judgments=["Unknown"],
+    )
 
     print(f"\n完了")
     print(f"  統計図: {out_stats}")
