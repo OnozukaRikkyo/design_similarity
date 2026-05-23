@@ -303,7 +303,7 @@ def plot_density_map(
     if log_x:
         ax.set_xscale("log")
         ax.set_xlim(rank_lo * 0.85, rank_hi)
-        ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
+        ax.xaxis.set_major_formatter(ticker.LogFormatterMathtext())
     else:
         ax.set_xlim(rank_lo, rank_hi)
         ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(5))
