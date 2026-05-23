@@ -196,15 +196,27 @@ def make_individual_figs(df: pd.DataFrame, out_dir: Path, min_n: int) -> None:
     bp1 = _draw_boxplot(ax1, cnt_data, COLOR_CUMUL)
     _style_ax_log(ax1, years,
                   ylabel="Citation Count",
-                  title="Vintage Effect: Citation Count by Filing Year")
+                  # Vintage Effect: Citation Count by Filing Year"
+                  title="")
     ax1.set_yscale("linear")
     ax1.yaxis.set_major_formatter(ticker.ScalarFormatter())
     ax1.set_ylim(0, 25)
 
+    text_ys = []
     for i, vals in enumerate(cnt_data):
         whisker_top = bp1["whiskers"][2 * i + 1].get_ydata()[1]
-        text_y = min(whisker_top, 25) + 0.3
-        ax1.text(i, text_y, str(len(vals)), ha="center", va="bottom", fontsize=10)
+        text_ys.append(min(whisker_top, 25) + 0.3)
+
+    STAGGER = 1.5
+    offsets = [0.0] * len(text_ys)
+    for i in range(1, len(text_ys)):
+        if abs(text_ys[i] - text_ys[i - 1]) < 0.5:
+            offsets[i] = STAGGER if offsets[i - 1] == 0.0 else 0.0
+
+    for i, vals in enumerate(cnt_data):
+        ax1.text(i, text_ys[i] + offsets[i], f"{len(vals):,}",
+                 ha="center", va="bottom", fontsize=10)
+
 
     path1 = out_dir / "fig_vintage_effect.png"
     fig1.tight_layout()
