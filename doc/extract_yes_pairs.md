@@ -91,6 +91,15 @@ qwen_similarity_results/*.jsonl  ──→  process_file()  ←──┘
 python extract_yes_pairs.py
 ```
 
+### スキップモード（resume）
+
+スクリプト起動時に `OUT_JSONL_DIR`（`qwen_yes_pairs/`）の既存 JSONL を読み込み、
+処理済みの `(source, target)` ペアをスキップして未処理分のみ追記する。
+中断後の再開や、新年度データ追加時の差分更新に使用できる。
+
+- 画像ファイルは上書き保存のため重複しない
+- JSONL は追記モードのため、スキップ判定なしに再実行すると重複が発生する（スキップモードで防止）
+
 ---
 
 ## 前後の処理との関係

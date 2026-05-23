@@ -131,12 +131,21 @@ python analysis/split_by_reason.py
 BACKEND = "qwen"    # "gemini" | "qwen"
 ```
 
-再実行する場合は出力ディレクトリを事前に削除：
+### スキップモード（resume）
+
+スクリプト起動時に出力先 3 ディレクトリ（`exact_match/`, `high_similar/`, `similar/`）の
+既存 JSONL を読み込み、処理済みの `(source, target)` ペアをスキップして未処理分のみ追記する。
+中断後の再開や、新年度データ追加時の差分更新に使用できる。
+
+- JSONL は追記モードのため、スキップ判定なしに再実行すると重複が発生する（スキップモードで防止）
+- 画像は `shutil.copy2` による上書きのため重複しない
+- 完全に作り直す場合は出力ディレクトリを削除してから実行：
 
 ```bash
 rm -rf /mnt/eightthdd/uspto/yes_pair/qwen/exact_match
 rm -rf /mnt/eightthdd/uspto/yes_pair/qwen/high_similar
 rm -rf /mnt/eightthdd/uspto/yes_pair/qwen/similar
+python analysis/split_by_reason.py
 ```
 
 ---

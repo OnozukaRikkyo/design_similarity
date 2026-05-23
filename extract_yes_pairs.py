@@ -173,11 +173,30 @@ def concat_images(
 # ---------------------------------------------------------------------------
 # JSONL 処理（年別バケットに振り分け）
 # ---------------------------------------------------------------------------
+def load_done_pairs(jsonl_out_dir: Path) -> set[tuple[str, str]]:
+    """既存の出力 JSONL から処理済み (source, target) ペアを収集する。"""
+    done = set()
+    for p in jsonl_out_dir.glob("*.jsonl"):
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    done.add((rec["source"], rec["target"]))
+                except (json.JSONDecodeError, KeyError):
+                    pass
+    print(f"スキップ対象（処理済みペア）: {len(done):,} 件", flush=True)
+    return done
+
+
 def process_file(
     jsonl_path: Path,
     jsonl_out_dir: Path,
     img_out: Path,
     patent_index: dict[str, dict],
+    done_pairs: set[tuple[str, str]],
 ) -> tuple[int, int]:
     """
     jsonl_path の全レコードを走査し、similarity=Yes のものを
@@ -206,6 +225,9 @@ def process_file(
                 continue
 
             if rec.get("similarity") != "Yes":
+                continue
+
+            if (rec["source"], rec["target"]) in done_pairs:
                 continue
 
             found += 1
@@ -285,11 +307,13 @@ def main():
         print(f"JSONL ファイルが見つかりません: {RESULTS_DIR}")
         sys.exit(1)
 
+    done_pairs = load_done_pairs(OUT_JSONL_DIR)
+
     total_found = total_skipped = 0
     for path in jsonl_files:
         print(f"処理中: {path.name}")
-        found, skipped = process_file(path, OUT_JSONL_DIR, OUT_IMG_DIR, patent_index)
-        print(f"  → similarity=Yes: {found}件  (画像スキップ: {skipped}件)")
+        found, skipped = process_file(path, OUT_JSONL_DIR, OUT_IMG_DIR, patent_index, done_pairs)
+        print(f"  → similarity=Yes（新規）: {found}件  (画像スキップ: {skipped}件)")
         total_found += found
         total_skipped += skipped
 

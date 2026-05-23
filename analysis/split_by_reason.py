@@ -105,9 +105,32 @@ def _copy_image(src: str, tgt: str, dst_dir: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 処理済みペアのロード
+# ---------------------------------------------------------------------------
+def load_done_pairs(*jsonl_dirs: Path) -> set[tuple[str, str]]:
+    """出力済み JSONL から処理済み (source, target) ペアを収集する。"""
+    done = set()
+    for d in jsonl_dirs:
+        if not d.exists():
+            continue
+        for p in d.glob("*.jsonl"):
+            with open(p, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        done.add((rec["source"], rec["target"]))
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+    return done
+
+
+# ---------------------------------------------------------------------------
 # 年別 JSONL 処理
 # ---------------------------------------------------------------------------
-def process_year(jsonl_path: Path) -> dict:
+def process_year(jsonl_path: Path, done_pairs: set[tuple[str, str]]) -> dict:
     year = jsonl_path.stem
 
     records = []
@@ -117,7 +140,9 @@ def process_year(jsonl_path: Path) -> dict:
             if not line:
                 continue
             try:
-                records.append(json.loads(line))
+                rec = json.loads(line)
+                if (rec["source"], rec["target"]) not in done_pairs:
+                    records.append(rec)
             except json.JSONDecodeError as e:
                 print(f"  [WARN] parse error {jsonl_path.name}:{lineno}: {e}", file=sys.stderr)
 
@@ -203,7 +228,10 @@ def main() -> None:
         print(f"JSONL ファイルが見つかりません: {INPUT_JSONL_DIR}", file=sys.stderr)
         sys.exit(1)
 
-    results = [process_year(p) for p in jsonl_files]
+    done_pairs = load_done_pairs(EXACT_JSONL_DIR, HIGH_SIMILAR_JSONL_DIR, SIMILAR_JSONL_DIR)
+    print(f"スキップ対象（処理済みペア）: {len(done_pairs):,} 件")
+
+    results = [process_year(p, done_pairs) for p in jsonl_files]
 
     totals = {k: sum(r[k] for r in results)
               for k in ("total", "exact", "high_similar", "similar",
