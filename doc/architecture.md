@@ -212,6 +212,18 @@ D18 perspective で約 7.8 MB（959 件 × 2048 次元 × 4 bytes）が二重に
 `design_similarity/vector/run_pipeline.py` → ベクトル検索  
 実行時は必ず `cd` 先とパスを確認すること。
 
+### 5. レコード数がインデックス件数を超える理由
+
+`rank_results` のレコード数（D18 perspective: 1,447件）は rank_index の特許数（959件）より多いが、これは正常。
+
+- **インデックス件数（959）** = ユニーク特許数（グラフの**節点**数）
+- **レコード数（1,447）** = 引用ペア数（グラフの**辺**数）
+
+同一の特許が複数のペアの source または target として登場するため、辺の数が節点数を超える。
+D18 perspective では source∪target のユニーク特許数がちょうど 959件で rank_index 全件と一致する。
+
+---
+
 ### 4. `n_candidates` の統一（2026-05-23 修正済み）
 
 2007〜2014 年の rank_results が旧インデックス（457 件、n_candidates=456）で計算されたまま
