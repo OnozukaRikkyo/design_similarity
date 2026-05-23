@@ -277,6 +277,45 @@ def plot_overview(triads: list[dict], img_map: dict[str, str],
 
 
 # ==============================================================================
+# CSV エクスポート
+# ==============================================================================
+
+def export_csv(triads: list[dict], title_map: dict[str, str], out_path: Path) -> None:
+    """抽出 triad の基本データを CSV に出力する。
+
+    列:
+        rank, A, title_A, B, title_B, C, title_C,
+        s_AB, s_BC, s_AC,
+        score_weakest_link, score_angular_tightness,
+        score_bound_compliance, score_snn, confidence
+    """
+    rows = []
+    for triad in triads:
+        A, B, C = triad['A'], triad['B'], triad['C']
+        rows.append({
+            'rank':                    triad['rank'],
+            'A':                       A,
+            'title_A':                 title_map.get(A, ''),
+            'B':                       B,
+            'title_B':                 title_map.get(B, ''),
+            'C':                       C,
+            'title_C':                 title_map.get(C, ''),
+            's_AB':                    triad['s_AB'],
+            's_BC':                    triad['s_BC'],
+            's_AC':                    triad['s_AC'],
+            'score_weakest_link':      triad['score_weakest_link'],
+            'score_angular_tightness': triad['score_angular_tightness'],
+            'score_bound_compliance':  triad['score_bound_compliance'],
+            'score_snn':               triad['score_snn'],
+            'confidence':              triad['confidence'],
+        })
+    df = pd.DataFrame(rows)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_path, index=False, float_format='%.6f')
+    print(f'CSV ({len(df)} triads) → {out_path}')
+
+
+# ==============================================================================
 # メイン
 # ==============================================================================
 
@@ -349,6 +388,11 @@ def main() -> None:
 
     prefix = 'bottom' if args.bottom else 'triad'
     overview_name = 'overview_bottom.png' if args.bottom else 'overview.png'
+    csv_name = f'{prefix}_summary.csv'
+
+    # CSV
+    print(f'\nExporting CSV ...')
+    export_csv(top, title_map, OUTPUT_DIR / csv_name)
 
     # 個別図
     if not args.no_individual:

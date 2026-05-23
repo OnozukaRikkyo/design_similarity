@@ -598,6 +598,61 @@ def main() -> list[dict]:
     print(f'All {len(scored)} triangles → {out_path}')
 
     # ------------------------------------------------------------------
+    # 要約統計 CSV
+    # ------------------------------------------------------------------
+    print_section('Summary CSV')
+    import csv, statistics as _stat
+
+    degrees = [d for _, d in G_full.degree()]
+    conf_vals = [r['confidence'] for r in scored]
+    s1_vals   = [r['s1_weakest_link']      for r in scored]
+    s2_vals   = [r['s2_angular_tightness'] for r in scored]
+    s3_vals   = [r['s3_bound_compliance']  for r in scored]
+    s4_vals   = [r['s4_snn']               for r in scored]
+
+    rows = [
+        # ── グラフ構造 ──────────────────────────────────────────
+        ('patents_nodes',           G_full.number_of_nodes()),
+        ('pairs_edges',             G_full.number_of_edges()),
+        ('triangles_3cliques',      len(triangles)),
+        # ── 画像タイプ別ペア数 ───────────────────────────────────
+        ('pairs_perspective',       type_dist.get('perspective', 0)),
+        ('pairs_overview',          type_dist.get('overview',    0)),
+        ('pairs_front',             type_dist.get('front',       0)),
+        # ── ノード次数 ──────────────────────────────────────────
+        ('degree_min',              min(degrees)),
+        ('degree_median',           _stat.median(degrees)),
+        ('degree_max',              max(degrees)),
+        # ── cosine 類似度（エッジ） ──────────────────────────────
+        ('cosine_sim_min',          round(all_sims[0],    6)),
+        ('cosine_sim_median',       round(all_sims[n//2], 6)),
+        ('cosine_sim_max',          round(all_sims[-1],   6)),
+        # ── 三角形スコア記述統計 ─────────────────────────────────
+        ('s1_weakest_link_min',     round(min(s1_vals),              6)),
+        ('s1_weakest_link_median',  round(_stat.median(s1_vals),     6)),
+        ('s1_weakest_link_max',     round(max(s1_vals),              6)),
+        ('s2_angular_tightness_min',    round(min(s2_vals),          6)),
+        ('s2_angular_tightness_median', round(_stat.median(s2_vals), 6)),
+        ('s2_angular_tightness_max',    round(max(s2_vals),          6)),
+        ('s3_bound_compliance_min',    round(min(s3_vals),           6)),
+        ('s3_bound_compliance_median', round(_stat.median(s3_vals),  6)),
+        ('s3_bound_compliance_max',    round(max(s3_vals),           6)),
+        ('s4_snn_min',              round(min(s4_vals),              6)),
+        ('s4_snn_median',           round(_stat.median(s4_vals),     6)),
+        ('s4_snn_max',              round(max(s4_vals),              6)),
+        ('confidence_min',          round(min(conf_vals),            6)),
+        ('confidence_median',       round(_stat.median(conf_vals),   6)),
+        ('confidence_max',          round(max(conf_vals),            6)),
+    ]
+
+    csv_path = OUTPUT_DIR / 'summary.csv'
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['metric', 'value'])
+        writer.writerows(rows)
+    print(f'Summary CSV → {csv_path}')
+
+    # ------------------------------------------------------------------
     # 可視化
     # ------------------------------------------------------------------
     print_section('Visualization')

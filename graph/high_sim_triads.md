@@ -26,6 +26,15 @@
 | `overview_bottom.png` | 下位 N 件の概観図（`--bottom` 時） |
 | `triad_001.png` 〜 | 上位 N 件の個別図（3枚横並び + メタ情報） |
 | `bottom_001.png` 〜 | 下位 N 件の個別図（`--bottom` 時） |
+| `triad_summary.csv` | 上位 N 件の triad メタデータ（ID・タイトル・スコア） |
+| `bottom_summary.csv` | 下位 N 件の triad メタデータ（`--bottom` 時） |
+
+`graph/output/D18/`（`graph_analysis.py` が生成）
+
+| ファイル | 内容 |
+|---|---|
+| `summary.csv` | D18 グラフ全体の基本統計（ノード数・ペア数・三角形数など） |
+| `triadic_scored.jsonl` | 全 1593 三角形のスコア（confidence 降順） |
 
 ---
 
@@ -130,6 +139,62 @@ python graph/extract_high_sim_triads.py --line-enhance none
 # overview のみ（個別図を省略、高速）
 python graph/extract_high_sim_triads.py --no-individual -N 50
 ```
+
+---
+
+## summary.csv の列定義（`graph_analysis.py` 出力）
+
+`graph/output/D18/summary.csv` — D18 共引用グラフの基本統計を metric/value 形式で格納。
+
+| metric | 内容 |
+|---|---|
+| `patents_nodes` | ユニーク特許数（グラフのノード数） |
+| `pairs_edges` | 共引用ペア数（グラフのエッジ数） |
+| `triangles_3cliques` | 3-clique（三角形）の総数 |
+| `pairs_perspective` | 画像タイプ perspective のペア数 |
+| `pairs_overview` | 画像タイプ overview のペア数 |
+| `pairs_front` | 画像タイプ front のペア数 |
+| `degree_min/median/max` | ノード次数の最小・中央値・最大 |
+| `cosine_sim_min/median/max` | エッジ cosine 類似度の最小・中央値・最大 |
+| `s1_weakest_link_*` | Score 1 の最小・中央値・最大 |
+| `s2_angular_tightness_*` | Score 2 の最小・中央値・最大 |
+| `s3_bound_compliance_*` | Score 3 の最小・中央値・最大 |
+| `s4_snn_*` | Score 4 の最小・中央値・最大 |
+| `confidence_min/median/max` | 統合確信度の最小・中央値・最大 |
+
+D18 実測値:
+
+| metric | value |
+|---|---|
+| patents_nodes | 1030 |
+| pairs_edges | 1530 |
+| triangles_3cliques | 1593 |
+| pairs_perspective | 1447 |
+| pairs_overview | 74 |
+| pairs_front | 9 |
+| degree_min | 1 |
+| degree_median | 2.0 |
+| degree_max | 21 |
+| cosine_sim_min | 0.401826 |
+| cosine_sim_median | 0.891905 |
+| cosine_sim_max | 0.996734 |
+| confidence_min | 0.344034 |
+| confidence_median | 0.758897 |
+| confidence_max | 0.929797 |
+
+## triad_summary.csv の列定義（`extract_high_sim_triads.py` 出力）
+
+| 列 | 内容 |
+|---|---|
+| `rank` | confidence 順位（全 1593 件中） |
+| `A`, `B`, `C` | 三角形を構成する特許 ID |
+| `title_A`, `title_B`, `title_C` | 各特許の意匠タイトル |
+| `s_AB`, `s_BC`, `s_AC` | 各辺の cosine 類似度 |
+| `score_weakest_link` | S1 |
+| `score_angular_tightness` | S2 |
+| `score_bound_compliance` | S3 |
+| `score_snn` | S4 |
+| `confidence` | 統合確信度（加重和） |
 
 ---
 
