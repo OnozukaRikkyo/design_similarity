@@ -152,14 +152,14 @@ python vector/analysis/rank_analysis.py --class D18 --use-llm
 python vector/analysis/export_non_exact_pairs.py --class D18 --use-llm
 ```
 
-### D18 perspective の分類結果（2026-05-19）
+### D18 perspective の分類結果（2026-05-24）
 
 | カテゴリ | 件数 | 割合 |
 |---------|------|------|
-| Yes_exact | 102 | 94% |
-| Yes_nonexact | 7 | 6% |
-| No | 459 | — |
-| Unknown | 16 | — |
+| Yes_exact | 175 | 91% |
+| Yes_nonexact | 17 | 9% |
+| No | 1,112 | — |
+| Unknown | 143 | — |
 
 ---
 

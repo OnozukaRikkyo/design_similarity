@@ -371,6 +371,15 @@ def main() -> None:
         / "rank_analysis" / args.sim / args.img_type
         / "non_exact_pairs"
     )
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 既存 PNG を削除（rank 変化で同ペアの旧ファイルが残存するのを防ぐ）
+    stale = list(out_dir.glob("*.png"))
+    if stale:
+        for f in stale:
+            f.unlink()
+        print(f"既存ファイル削除: {len(stale)} 件")
+
     print(f"出力先: {out_dir}")
     print()
 

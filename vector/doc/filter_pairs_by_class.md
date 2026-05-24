@@ -192,9 +192,9 @@ python filter_pairs_by_class.py --no-resume --class D18
 - クラス CSV が存在しない年はスキップされる
 - GPU 不要（テキスト処理のみ）
 
-### edge_list_with_class/ のカバー年（2026-05-18 時点）
+### edge_list_with_class/ のカバー年（2026-05-24 確認済み）
 
-`edge_list_with_class/` は **2007〜2017 年分のみ**生成済み。2018〜2022 年はスキップされる。
+`edge_list_with_class/` は **2007〜2022 全年**生成済み。
 
 | ディレクトリ | 2007〜2017 | 2018〜2022 |
 |---|:---:|:---:|

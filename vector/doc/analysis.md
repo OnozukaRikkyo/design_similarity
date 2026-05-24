@@ -270,18 +270,18 @@ python vector/analysis/export_non_exact_pairs.py --class D18
 
 ---
 
-## D18 の現状（2026-05-19 確認）
+## D18 の現状（2026-05-24 確認）
 
 | 項目 | 値 |
 |---|---|
 | 対象クラス | D18 のみ（他クラスは未作成） |
 | 対象年 | 2007〜2022（16 年分） |
-| all.jsonl 総件数 | 634 件 |
-| Yes（Similar） | 131 件 |
-| No（Non-similar） | 486 件 |
-| Unknown | 17 件 |
+| all.jsonl 総件数 | 1,530 件 |
+| Yes（Similar） | 217 件 |
+| No（Non-similar） | 1,157 件 |
+| Unknown | 156 件 |
 
-Unknown は `qwen_similarity_results/` に対応するペアが存在しない年（2016〜2022）のレコード。
+Unknown は `qwen_similarity_results/` に対応するペアが存在しない年（2020〜2022）のレコード。
 `judge_cited_pairs.py` の処理が進むにつれ Yes/No に変わる。
 
 ---

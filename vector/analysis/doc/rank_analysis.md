@@ -19,12 +19,17 @@ vector/analysis/rank_analysis.py
 
 ```
 vector/output/{CLASS}/{sim_func}/
-  rank_ccdf_{type}.png              — Figure 1: 順位の CCDF
-  rank_scatter_{type}.png           — Figure 2: 順位 vs 類似度の散布図
-  rank_scatter_{type}_zoom.png      — Figure 2b: 散布図拡大（rank ≤ 20, sim ≥ 0.85）
-  high_sim_{type}_0950.csv          — 高類似度レコード（similarity ≥ 0.950）
+  rank_ccdf_{type}.png                    — Figure 1: 順位の CCDF
+  rank_scatter_{type}.png                 — Figure 2: 順位 vs 類似度の散布図
+  rank_scatter_{type}_zoom.png            — Figure 2b: 散布図拡大（rank ≤ 20, sim ≥ 0.85）
+  rank_density_{type}.png                 — Figure 2d: 2D 密度マップ（rank vs similarity）
+  rank_density_{type}_zoom.png            — Figure 2d-zoom: 密度マップ拡大
+  rank_density_{type}_loglog.png          — Figure 2d-loglog: 密度マップ（log rank 軸）
+  rank_density_{type}_loglog_zoom.png     — Figure 2d-loglog-zoom: 密度マップ（log rank + log color, 拡大）
+  high_sim_{type}_0950.csv                — 高類似度レコード（similarity ≥ 0.950、Unknown 含む）
+  high_sim_{type}_0950_judged.csv         — 高類似度レコード（similarity ≥ 0.950、Unknown 除外）
   pair_comparison/
-    {src}--{tgt}_{type}_top10.png   — Figure 3: ベースペア + Top-10 近傍グリッド
+    {src}--{tgt}_{type}_top10.png         — Figure 3: ベースペア + Top-10 近傍グリッド
 ```
 
 ---
@@ -40,10 +45,10 @@ vector/output/{CLASS}/{sim_func}/
 | Non-similar (No) | LLM が非類似と判定した引用ペア（赤破線） |
 | Random baseline | 順位が一様分布の場合の期待値（灰点線） |
 
-**D18 perspective の観察（2026-05-18）:**
+**D18 perspective の観察（2026-05-24）:**
 
-- Yes 群の中央値ランク: **4** / 456  
-- No 群の中央値ランク: **29** / 456  
+- Yes 群の中央値ランク: **7.5** / 958  
+- No 群の中央値ランク: **84.5** / 958  
 - 両群ともランダム期待値（斜線）を大きく下回り、ベクトル類似度が引用の視覚的関係を捉えていることを示す  
 - Yes 群は No 群より急峻に降下 → LLM 判定と視覚的類似度ランクの整合性を確認
 
@@ -71,10 +76,10 @@ FALLBACK_EXACT_KEYWORDS = ["identical", "exact", "same"]
 
 `reason` 文字列に対して単語境界（`\b`）付き正規表現でいずれかがマッチすれば **Exact match**、しなければ **Non-exact**。`--use-llm` を付けると Qwen3-VL-4B-Instruct がキーワードを動的に取得する（詳細は [export_non_exact_pairs.md](export_non_exact_pairs.md) 参照）。
 
-### D18 perspective の観察（2026-05-19）
+### D18 perspective の観察（2026-05-24）
 
-- Exact match（102 件）は低ランク・高類似度（左上）に密集
-- Non-exact similar（7 件）はランク 5〜18 付近に散在し、類似度もやや低め
+- Exact match（175 件）は低ランク・高類似度（左上）に密集
+- Non-exact similar（17 件）はランク 5〜300 付近に散在し、類似度もやや低め
 - Exact match は類似度 ≥ 0.9 の領域で Non-similar と明確に分離できる
 
 ---
@@ -98,9 +103,10 @@ FALLBACK_EXACT_KEYWORDS = ["identical", "exact", "same"]
 | `source_image` | クエリ画像ファイルパス |
 | `target_image` | 引用対象画像ファイルパス |
 
-**D18 perspective の結果（2026-05-20）:**
+**D18 perspective の結果（2026-05-24）:**
 
-- 該当件数: **370 件** / 1447 件中
+- 該当件数（Unknown 含む）: **370 件** / 1447 件中
+- 該当件数（Unknown 除外）: **357 件** / 1447 件中
 
 ---
 
@@ -122,7 +128,7 @@ FALLBACK_EXACT_KEYWORDS = ["identical", "exact", "same"]
 
 **D18 perspective の代表ペア（D0574419 → D0574421）:**
 
-- 引用対象 B のランク: **4** / 456（Top-10 圏内に引用ペアが出現）
+- 引用対象 B のランク: **4** / 958（Top-10 圏内に引用ペアが出現）
 - コサイン類似度: **0.9591**
 - LLM 判定: Yes（信頼度 5）
 

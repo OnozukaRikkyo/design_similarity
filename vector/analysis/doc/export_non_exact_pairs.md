@@ -103,6 +103,9 @@ class/{CLASS}/rank_judgments/{sim_func}/all.jsonl
   {src}--{tgt}_rank{r:03d}.png
 ```
 
+> **ディレクトリは実行前に自動クリアされる。**  
+> `qwen_similarity_results/` が更新されて rank 番号が変わっても旧ファイルは残らない。
+
 ### 1 PNG のレイアウト（2行 × 5列）
 
 | 位置 | 内容 |

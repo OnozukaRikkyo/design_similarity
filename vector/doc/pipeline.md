@@ -370,14 +370,7 @@ python add_class_to_edge_list.py
 # 出力: /mnt/eightthdd/uspto/edge_list_with_class/{year}.csv
 ```
 
-> **現状（2026-05-18 時点）**: 2007〜2017 年分のみ生成済み。
-> 2018〜2022 年の上流データ（`edge_list/`・`data/`）は存在するため、以下で生成可能:
->
-> ```bash
-> python add_class_to_edge_list.py 2018 2019 2020 2021 2022
-> ```
->
-> これを実行しないと `filter_pairs_by_class.py`（Step 1）が 2018〜2022 年をスキップする。
+> **現状（2026-05-24 確認済み）**: 2007〜2022 全年生成済み。
 
 #### 4. 全クラスベクトル生成（cited_image_vectors/）
 
