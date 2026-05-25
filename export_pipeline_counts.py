@@ -52,17 +52,18 @@ def load_rank_index_count() -> int:
     return len(np.load(RANK_INDEX))
 
 
-def load_all_jsonl_counts() -> tuple[int, Counter]:
-    """(total_records, perspective_judgment_counter) を返す。"""
+def load_all_jsonl_counts() -> tuple[int, Counter, Counter]:
+    """(total_records, all_judgment_counter, perspective_judgment_counter) を返す。"""
     records = [
         json.loads(l)
         for l in ALL_JSONL.read_text().splitlines()
         if l.strip()
     ]
+    all_cnt  = Counter(r["judgment"] for r in records)
     persp_cnt = Counter(
         r["judgment"] for r in records if r.get("type") == "perspective"
     )
-    return len(records), persp_cnt
+    return len(records), all_cnt, persp_cnt
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +72,7 @@ def load_all_jsonl_counts() -> tuple[int, Counter]:
 def main() -> None:
     diag        = load_diagonal()
     unique_pats = load_rank_index_count()
-    total_recs, persp_cnt = load_all_jsonl_counts()
+    total_recs, all_cnt, persp_cnt = load_all_jsonl_counts()
 
     ref_within  = int(diag["reference_diagonal"].sum())
     ref_cross   = int(diag["reference_cross_class"].sum())
@@ -100,10 +101,10 @@ def main() -> None:
         # --- Retrieval evaluation（Yes / No のみ）---
         ("Retrieval evaluation, perspective view","MLLM-similar pairs",          persp_cnt["Yes"]),
         ("Retrieval evaluation, perspective view","MLLM-non-similar pairs",      persp_cnt["No"]),
-        # --- Scatter-plot analysis（Yes / No / Unknown 全て）---
-        ("Scatter-plot analysis, D18",            "Similar pairs",               persp_cnt["Yes"]),
-        ("Scatter-plot analysis, D18",            "Non-similar pairs",           persp_cnt["No"]),
-        ("Scatter-plot analysis, D18",            "Unknown or unparsed pairs",   persp_cnt["Unknown"]),
+        # --- Scatter-plot analysis（全タイプ: perspective + overview + front）---
+        ("Scatter-plot analysis, D18",            "Similar pairs",               all_cnt["Yes"]),
+        ("Scatter-plot analysis, D18",            "Non-similar pairs",           all_cnt["No"]),
+        ("Scatter-plot analysis, D18",            "Unknown or unparsed pairs",   all_cnt["Unknown"]),
     ]
 
     df = pd.DataFrame(rows, columns=["stage", "item", "count"])

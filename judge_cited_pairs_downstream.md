@@ -10,23 +10,35 @@
 
 ```bash
 cd /home/sonozuka/design_similarity
-CLASS=D18
 
-# Step 5: all.jsonl を再生成
-python vector/join_judgments.py --class ${CLASS} --sim cosine_numpy --no-resume
+# 全下流を一括更新（毎回このコマンドだけでよい）
+python update_downstream.py
 
-# 分析図を再生成
-python vector/analysis/rank_analysis.py --class ${CLASS}
-python vector/analysis/export_yes_reasons.py --class ${CLASS}
-python vector/analysis/export_non_exact_pairs.py --class ${CLASS}
+# 特定ステップ以降のみ実行（例: Step D 以降）
+python update_downstream.py --from-step D
 
-# 集計 CSV を再生成
-python export_diagonal_csv.py
-python export_pipeline_counts.py
-
-# ヒートマップ図を再生成
-python make_two_heatmaps.py
+# 別クラス指定
+python update_downstream.py --class D10
 ```
+
+### ステップ一覧
+
+実行順序は依存関係に基づく（アルファベット順ではない）:
+
+| 実行順 | Step | スクリプト | 出力 | 重複処理 |
+|--------|------|-----------|------|---------|
+| 1 | A | `extract_all_pairs.py` | `all_pair/qwen_all_pairs/` | 処理済みペアをスキップ |
+| 2 | B | `extract_yes_pairs.py` | `yes_pair/qwen_yes_pairs/` | 処理済みペアをスキップ |
+| 3 | C | `analysis/split_by_reason.py` | `yes_pair/qwen/{exact_match,...}/` | 処理済みペアをスキップ |
+| 4 | D | `export_diagonal_csv.py` | `output/diagonal_summary.csv` | 常に全件上書き |
+| 5 | E | `make_two_heatmaps.py` | `output/heatmap_*.png` | 常に全件上書き |
+| 6 | G | `vector/join_judgments.py --no-resume` | `rank_judgments/.../all.jsonl` | 常に全件上書き |
+| 7 | H | `vector/analysis/rank_analysis.py` | `vector/output/D18/` | 常に全件上書き |
+| 8 | I | `vector/analysis/export_yes_reasons.py` | `vector/output/D18/yes_sim080_reasons.csv` | 常に全件上書き |
+| 9 | J | `vector/analysis/export_non_exact_pairs.py` | `rank_analysis/.../non_exact_pairs/` | 常に全件上書き |
+| 10 | **F** | `export_pipeline_counts.py` | `output/pipeline_counts.csv` | 常に全件上書き |
+
+> **Step F は Step D と Step G の両方に依存する。** `pipeline_counts.csv` には `diagonal_summary.csv`（Step D）と `all.jsonl`（Step G）の両方のデータが含まれるため、必ず最後に実行する。
 
 > Step 1〜4（ペア抽出・ベクトル生成・インデックス・ランク検索）は `qwen_similarity_results/` と無関係なので不要。
 
@@ -44,7 +56,7 @@ done
 
 0 件の年は `judgment=Unknown` になるが処理は正常に完了する。
 
-### 処理状況（2026-05-24 更新）
+### 処理状況（2026-05-25 更新）
 
 ```
 2007.jsonl: 5859/5859   ✓
@@ -60,21 +72,21 @@ done
 2017.jsonl: 54278/54278 ✓
 2018.jsonl: 52619/52619 ✓
 2019.jsonl: 59044/59044 ✓
-2020.jsonl: 9461/55765  処理中
-2021.jsonl: 0/46614     未処理
-2022.jsonl: 0/17127     未処理
+2020.jsonl: 55765/55765 ✓
+2021.jsonl: 4258/46614  処理中（D18分: 1/35 判定済み）
+2022.jsonl: 0/17127     未処理（D18分: 0/66）
 ```
 
-### all.jsonl の判定内訳（2026-05-24 更新、D18 / cosine_numpy）
+### all.jsonl の判定内訳（2026-05-25 更新、D18 / cosine_numpy）
 
 | judgment | 件数 |
 |----------|-----:|
-| Yes      |  217 |
-| No       | 1,157|
-| Unknown  |  156 |
+| Yes      |  222 |
+| No       | 1,208|
+| Unknown  |  100 |
 | **合計** | **1,530** |
 
-> 2020 の D18 ペア 56 件はまだ未判定（2020.jsonl の 9,461 件に D18 分は含まれていない）。
+> 2021 の D18 ペア 35 件は 1 件のみ判定済み。2022 の D18 ペア 66 件は未処理。
 
 ---
 
