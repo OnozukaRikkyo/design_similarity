@@ -54,7 +54,8 @@ design_similarity パイプライン 一括実行スクリプト
   [グラフ解析（--with-graph 時のみ）]  ← G に依存
   K: graph/graph_analysis.py           → graph/output/{CLASS}/triadic_scored.jsonl
   L: graph/extract_high_sim_triads.py  → graph/output/{CLASS}/high_sim_triads/
-  M: graph/verify/wcc_scoring.py       → graph/output/{CLASS}/verify/
+  N: graph/verify/discord_analysis.py  → graph/output/{CLASS}/verify/{fp,fn}.csv  ← K に依存
+  M: graph/verify/wcc_scoring.py       → graph/output/{CLASS}/verify/wcc_*_grid.png ← K,N に依存
 ─────────────────────────────────────────────────────────────────
 """
 
@@ -69,7 +70,7 @@ BASE = Path(__file__).resolve().parent
 # デフォルト実行順（依存関係に基づく。アルファベット順ではない）
 STEPS_VECTOR  = ["V1", "V2", "V3", "V4"]
 STEPS_DEFAULT = ["A", "B", "C", "D", "E", "G", "H", "I", "J", "F"]
-STEPS_GRAPH   = ["K", "L", "M"]
+STEPS_GRAPH   = ["K", "L", "N", "M"]
 ALL_STEPS     = STEPS_VECTOR + STEPS_DEFAULT + STEPS_GRAPH
 
 STEP_LABELS = {
@@ -89,7 +90,8 @@ STEP_LABELS = {
     "F":  "export_pipeline_counts   → output/pipeline_counts.csv",
     "K":  "graph_analysis           → graph/output/{CLASS}/triadic_scored.jsonl",
     "L":  "extract_high_sim_triads  → graph/output/{CLASS}/high_sim_triads/",
-    "M":  "wcc_scoring              → graph/output/{CLASS}/verify/",
+    "N":  "discord_analysis         → graph/output/{CLASS}/verify/{fp,fn}.csv",
+    "M":  "wcc_scoring              → graph/output/{CLASS}/verify/wcc_*_grid.png",
 }
 
 
@@ -223,6 +225,9 @@ def main() -> None:
 
         elif step == "L":
             run([sys.executable, "graph/extract_high_sim_triads.py"])
+
+        elif step == "N":
+            run([sys.executable, "graph/verify/discord_analysis.py", "--class", cls])
 
         elif step == "M":
             run([sys.executable, "graph/verify/wcc_scoring.py"])

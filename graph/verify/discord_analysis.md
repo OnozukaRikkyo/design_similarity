@@ -186,9 +186,10 @@ Vector Positive の定義: `rank ≤ --rank-fp AND sim ≥ --sim-fp`
 
 ```bash
 cd /home/sonozuka/design_similarity
-python vector/join_judgments.py --class D18 --sim cosine_numpy
-python graph/graph_analysis.py
+python update_downstream.py --with-graph
 ```
+
+Step G（`join_judgments.py`）→ K（`graph_analysis.py`）→ L → N（`discord_analysis.py`）→ M（`wcc_scoring.py`）の順に自動実行される。
 
 **新しい年度データを追加した場合**（USPTO データが増えた）
 
@@ -198,15 +199,10 @@ python build_edge_list.py
 python extract_cited_image_pairs.py
 python add_class_to_edge_list.py
 python judge_cited_pairs.py               # 新規ペアのみ追加判定
-python vector/filter_pairs_by_class.py --class D18
-python vector/build_class_vectors.py --class D18 --no-gpu
-python vector/build_rank_index.py --class D18
-python vector/compute_ranks.py --class D18 --sim cosine_numpy
-python vector/join_judgments.py --class D18 --sim cosine_numpy
-python graph/graph_analysis.py
+python update_downstream.py --with-vector --no-gpu --with-graph
 ```
 
-詳細: [`vector/doc/pipeline.md`](../../vector/doc/pipeline.md) · [`graph/triadic_scoring.md`](../triadic_scoring.md)
+詳細: [`../../UPDATE.md`](../../UPDATE.md) · [`../../vector/doc/pipeline.md`](../../vector/doc/pipeline.md) · [`../triadic_scoring.md`](../triadic_scoring.md)
 
 ---
 

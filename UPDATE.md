@@ -79,7 +79,10 @@ judge_cited_pairs.py（別サーバーで実行中）
     ║  K  graph_analysis         → graph/output/D18/               ║
     ║                               triadic_scored.jsonl           ║
     ║  L  extract_high_sim_triads→ graph/output/D18/high_sim/      ║
+    ║  N  discord_analysis       → graph/output/D18/verify/        ║
+    ║                               fp.csv / fn.csv  ← K に依存    ║
     ║  M  wcc_scoring            → graph/output/D18/verify/        ║
+    ║                               wcc_*_grid.png  ← K,N に依存   ║
     ╚══════════════════════════════════════════════════════════════╝
 ```
 
@@ -105,7 +108,8 @@ judge_cited_pairs.py（別サーバーで実行中）
 | 10 | **F** | `export_pipeline_counts.py` | **D, G** | 全件上書き |
 | — | K | `graph/graph_analysis.py` | G | 全件上書き |
 | — | L | `graph/extract_high_sim_triads.py` | K | 全件上書き |
-| — | M | `graph/verify/wcc_scoring.py` | K,G | 全件上書き |
+| — | N | `graph/verify/discord_analysis.py` | K,G | 全件上書き |
+| — | M | `graph/verify/wcc_scoring.py` | K,N | 全件上書き |
 
 V1〜V4 は `--with-vector` 時のみ、K〜M は `--with-graph` 時のみ実行。
 

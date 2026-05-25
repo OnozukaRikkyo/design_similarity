@@ -254,11 +254,19 @@ python vector/analysis/export_non_exact_pairs.py --class D18 --min-sim 0.9
 
 ## データ更新後の再実行
 
-`qwen_similarity_results/` が更新された場合は先に `all.jsonl` を再生成してから実行する。
+`qwen_similarity_results/` が更新された場合は `update_downstream.py` を実行する。
+Step G（`join_judgments.py`）と H〜J（分析スクリプト群）が自動的に順番に実行される。
 
 ```bash
-# Step 5 で all.jsonl を更新
-python vector/run_pipeline.py --class D18 --steps 5 --no-resume
+cd /home/sonozuka/design_similarity
+python update_downstream.py
+```
+
+個別に再実行したい場合:
+
+```bash
+# all.jsonl を更新
+python vector/join_judgments.py --class D18 --no-resume
 
 # 分析を再実行
 python vector/analysis/rank_analysis.py --class D18
@@ -266,7 +274,7 @@ python vector/analysis/export_yes_reasons.py --class D18
 python vector/analysis/export_non_exact_pairs.py --class D18
 ```
 
-詳細: [join_judgments.md](join_judgments.md)
+詳細: [join_judgments.md](join_judgments.md) · [../../UPDATE.md](../../UPDATE.md)
 
 ---
 

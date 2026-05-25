@@ -92,9 +92,6 @@ python vector/join_judgments.py --class D18
 
 # 強制上書き（qwen_similarity_results/ が更新されたとき）
 python vector/join_judgments.py --class D18 --no-resume
-
-# run_pipeline.py 経由（Step 5 のみ、強制上書き）
-python vector/run_pipeline.py --class D18 --steps 5 --no-resume
 ```
 
 ---
@@ -114,16 +111,10 @@ done
 
 0 件の年は `judgment=Unknown` になる。判定済み年のみ有効な Yes/No が付与される。
 
-### Step 2: all.jsonl を再生成（Step 5 を --no-resume で実行）
+### Step 2: all.jsonl を再生成
 
 ```bash
 cd /home/sonozuka/design_similarity
-python vector/run_pipeline.py --class D18 --steps 5 --no-resume
-```
-
-または直接:
-
-```bash
 python vector/join_judgments.py --class D18 --no-resume
 ```
 
