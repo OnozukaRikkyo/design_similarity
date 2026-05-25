@@ -19,6 +19,7 @@ vector/analysis/rank_analysis.py
 
 ```
 vector/output/{CLASS}/{sim_func}/
+  sim_histogram_{type}.png                — Figure 0: コサイン類似度分布（全件グレー + Yes 青）
   rank_ccdf_{type}.png                    — Figure 1: 順位の CCDF
   rank_scatter_{type}.png                 — Figure 2: 順位 vs 類似度の散布図
   rank_scatter_{type}_zoom.png            — Figure 2b: 散布図拡大（rank ≤ 20, sim ≥ 0.85）

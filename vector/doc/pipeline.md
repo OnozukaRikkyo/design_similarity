@@ -156,56 +156,29 @@ python add_class_to_edge_list.py 2023
 
 ### 一括実行（推奨）
 
-`run_pipeline.py` で Step 1〜5 を連続実行できる。
+**すべての実行は `update_downstream.py` で行う。** `vector/run_pipeline.py` は使わない。
 
 ```bash
 cd /home/sonozuka/design_similarity
 
-# D18 全ステップ（GPU 不要な場合）
-python vector/run_pipeline.py --class D18 --no-gpu
+# 通常の更新（qwen_similarity_results/ が進んだとき）
+python update_downstream.py
 
-# 別クラス（D10）を追加する場合
-python vector/run_pipeline.py --class D10 --no-gpu
+# 新クラス・新年追加時（ベクトルインデックスから再構築 + 全下流更新）
+python update_downstream.py --with-vector --no-gpu --class D18
 
-# Step 3 以降だけ再実行
-python vector/run_pipeline.py --class D18 --from-step 3
-
-# 特定ステップだけ実行
-python vector/run_pipeline.py --class D18 --steps 4 5
-
-# 全件上書き
-python vector/run_pipeline.py --class D18 --no-resume --no-gpu
+# 別クラス（D10）を新規追加する場合
+python update_downstream.py --with-vector --no-gpu --class D10
 ```
 
 | オプション | 説明 |
 |---|---|
 | `--class CLASS` | 対象クラスコード（デフォルト: D18） |
-| `--no-gpu` | Step 2 で GPU を使わない（既存ベクトルのコピーのみ） |
-| `--no-resume` | 全ステップの処理済みファイルを上書き |
-| `--steps N ...` | 実行するステップを個別指定 |
-| `--from-step N` | N 以降を連続実行 |
-| `years` | 処理年を絞る（Step 1/2/4 に渡される） |
-
-### ステップ個別実行
-
-```bash
-cd /home/sonozuka/design_similarity
-
-# --- D18（初回・GPU 不要な場合） ---
-python vector/filter_pairs_by_class.py --class D18
-python vector/build_class_vectors.py   --class D18 --no-gpu
-python vector/build_rank_index.py      --class D18
-python vector/compute_ranks.py         --class D18
-python vector/join_judgments.py        --class D18
-
-# --- 別クラス（D10）を追加する場合 ---
-python vector/filter_pairs_by_class.py --class D10
-python vector/build_class_vectors.py   --class D10 --no-gpu
-# cited_image_vectors/ にベクトルがなければ --no-gpu を外す（GPU が必要）
-python vector/build_rank_index.py      --class D10
-python vector/compute_ranks.py         --class D10
-python vector/join_judgments.py        --class D10
-```
+| `--with-vector` | ベクトルインデックス再構築（Step V1〜V4）を先頭に追加 |
+| `--no-gpu` | V2（build_class_vectors）で GPU を使わない |
+| `--with-graph` | グラフ解析（Step K〜M）を末尾に追加 |
+| `--from-step STEP` | 指定ステップ以降を連続実行 |
+| `--steps STEP ...` | 実行するステップを個別指定 |
 
 ---
 
