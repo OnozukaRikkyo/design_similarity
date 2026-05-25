@@ -12,6 +12,9 @@ design_similarity パイプライン 一括実行スクリプト
 【グラフ解析も含めて更新】
   python update_downstream.py --with-graph
 
+【wcc グリッド図だけ更新（fp/fn グリッド・threshold グリッド）】
+  python update_downstream.py --wcc
+
 【部分実行】
   python update_downstream.py --from-step G   # G 以降のみ
   python update_downstream.py --steps H F     # 指定ステップのみ
@@ -130,6 +133,10 @@ def main() -> None:
         help="グラフ解析（K〜M）を末尾に追加",
     )
     parser.add_argument(
+        "--wcc", action="store_true",
+        help="wcc グリッド図だけ更新（Step N: discord_analysis → Step M: wcc_scoring）",
+    )
+    parser.add_argument(
         "--no-gpu", action="store_true",
         help="V2（build_class_vectors）で GPU を使わない（既存ベクトルのコピーのみ）",
     )
@@ -146,11 +153,15 @@ def main() -> None:
     sim = args.sim
 
     # 実行ステップを決定
-    base_steps = (
-        (STEPS_VECTOR if args.with_vector else [])
-        + STEPS_DEFAULT
-        + (STEPS_GRAPH if args.with_graph else [])
-    )
+    if args.wcc:
+        run([sys.executable, "graph/verify/update_wcc_grids.py", "--class", cls])
+        return
+    else:
+        base_steps = (
+            (STEPS_VECTOR if args.with_vector else [])
+            + STEPS_DEFAULT
+            + (STEPS_GRAPH if args.with_graph else [])
+        )
 
     if args.from_step:
         idx = ALL_STEPS.index(args.from_step)

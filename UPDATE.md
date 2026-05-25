@@ -19,6 +19,14 @@ python update_downstream.py
 python update_downstream.py --with-graph
 ```
 
+### wcc グリッド図だけ更新したいとき
+
+```bash
+python update_downstream.py --wcc
+```
+
+`wcc_fp_grid.png` / `wcc_fn_grid.png` / `wcc_threshold_grid.png` の3図を再生成します。
+
 ### 新クラス・新年のベクトルインデックスから再構築するとき
 
 ```bash
