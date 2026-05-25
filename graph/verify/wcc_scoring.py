@@ -298,15 +298,12 @@ def plot_wcc_threshold_grid(
     s1_arr: np.ndarray,
     wcc_arr: np.ndarray,
     out_path: Path,
-    title: str = r'D18 — GT candidates: $S_1 \geq T_1$ and $S_{\rm WCC} \geq T_{\rm WCC}$',
-    cmap_name: str = 'Blues_r',
     bold_range: tuple[int, int] | None = (20, 50),
 ) -> np.ndarray:
-    """横軸 S_WCC × 縦軸 S1 の閾値グリッドを描画する。
+    """横軸 T_2 × 縦軸 T_1 の閾値グリッドを描画する。
 
-    threshold_grid.png (discord_analysis.py) と同構造。
-    セルの値 = S1 ≥ T1 かつ S_WCC ≥ T_WCC を満たす三角形の件数。
-    bold_range の範囲の件数を太字で強調（None = 強調なし）。
+    セルの値 = S1 ≥ T1 かつ S_WCC ≥ T_2 を満たす三角形の件数。
+    大きい値ほど濃い Blue。bold_range の件数を太字で強調（None = 強調なし）。
     """
     import matplotlib
     matplotlib.use('Agg')
@@ -322,21 +319,20 @@ def plot_wcc_threshold_grid(
         for j, tw in enumerate(ths_wcc):
             grid[i, j] = int(((s1_arr >= t1) & (wcc_arr >= tw)).sum())
 
-    fig, ax = plt.subplots(figsize=(8.0, 5.8), facecolor='white')
+    fig, ax = plt.subplots(figsize=(8.5, 6.0), facecolor='white')
 
-    cmap_obj = plt.get_cmap(cmap_name)
-    vmax_display = min(300, int(grid[0, 0]) or 1)
-    ax.imshow(grid, origin='upper', aspect='auto',
-              cmap=cmap_obj, vmin=0, vmax=vmax_display)
+    cmap_obj = plt.get_cmap('Blues')   # 大きい値 = 濃い青（全図共通）
+    vmax_display = max(1, min(300, int(grid[0, 0])))
+    im = ax.imshow(grid, origin='upper', aspect='auto',
+                   cmap=cmap_obj, vmin=0, vmax=vmax_display)
 
     ax.set_xticks(range(n_wcc))
     ax.set_xticklabels([f'{t:.3f}' for t in ths_wcc],
-                       fontsize=9, rotation=45, ha='right')
+                       fontsize=12, rotation=45, ha='right')
     ax.set_yticks(range(n_s1))
-    ax.set_yticklabels([f'{t:.3f}' for t in ths_s1], fontsize=9)
-    ax.set_xlabel(r'$T_{\rm WCC}$ (Watts-Strogatz clustering threshold)', fontsize=12)
-    ax.set_ylabel(r'$T_1$ (weakest-link threshold)', fontsize=12)
-    ax.set_title(title, fontsize=13)
+    ax.set_yticklabels([f'{t:.3f}' for t in ths_s1], fontsize=12)
+    ax.set_xlabel(r'$T_2$ (Watts-Strogatz clustering threshold)', fontsize=14)
+    ax.set_ylabel(r'$T_1$ (weakest-link threshold)', fontsize=14)
 
     for i in range(n_s1):
         for j in range(n_wcc):
@@ -349,11 +345,15 @@ def plot_wcc_threshold_grid(
                   if bold_range and bold_range[0] <= val <= bold_range[1]
                   else 'normal')
             ax.text(j, i, str(val), ha='center', va='center',
-                    fontsize=8, color=txt_color, fontweight=fw)
+                    fontsize=11, color=txt_color, fontweight=fw)
 
-    ax.tick_params(labelsize=9, width=0.6, length=3)
+    ax.tick_params(labelsize=12, width=0.6, length=3)
     for sp in ax.spines.values():
         sp.set_linewidth(0.6)
+
+    cbar = fig.colorbar(im, ax=ax, shrink=0.85)
+    cbar.set_label('Count', fontsize=13)
+    cbar.ax.tick_params(labelsize=11)
 
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -373,9 +373,9 @@ def plot_fp_fn_wcc_grids(results: list[dict], out_dir: Path) -> None:
 
     wcc_map = {(r['A'], r['B'], r['C']): r['score_wcc'] for r in results}
 
-    for case, csv_name, out_name, cmap_name in [
-        ('FP', 'fp.csv', 'wcc_fp_grid.png', 'Oranges_r'),
-        ('FN', 'fn.csv', 'wcc_fn_grid.png', 'Greens_r'),
+    for case, csv_name, out_name in [
+        ('FP', 'fp.csv', 'wcc_fp_grid.png'),
+        ('FN', 'fn.csv', 'wcc_fn_grid.png'),
     ]:
         csv_path = out_dir / csv_name
         if not csv_path.exists():
@@ -407,8 +407,6 @@ def plot_fp_fn_wcc_grids(results: list[dict], out_dir: Path) -> None:
             np.array(s1_list),
             np.array(wcc_list),
             out_dir / out_name,
-            title=rf'D18 {case} triads: $S_1 \times S_{{\rm WCC}}$ grid  (n={n})',
-            cmap_name=cmap_name,
             bold_range=None,
         )
 
