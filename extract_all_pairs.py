@@ -84,15 +84,37 @@ def _id_diff(src: str, tgt: str) -> int | None:
 
 
 # ---------------------------------------------------------------------------
+# 処理済みペアのロード（重複排除）
+# ---------------------------------------------------------------------------
+def load_done_pairs(jsonl_out_dir: Path) -> set[tuple[str, str]]:
+    done = set()
+    for p in sorted(jsonl_out_dir.glob("*.jsonl")):
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    done.add((rec["source"], rec["target"]))
+                except (json.JSONDecodeError, KeyError):
+                    pass
+    print(f"スキップ対象（処理済みペア）: {len(done):,} 件", flush=True)
+    return done
+
+
+# ---------------------------------------------------------------------------
 # JSONL 処理（年別バケットに振り分け）
 # ---------------------------------------------------------------------------
 def process_file(
     jsonl_path: Path,
     jsonl_out_dir: Path,
     patent_index: dict[str, dict],
-) -> int:
+    done_pairs: set[tuple[str, str]],
+) -> tuple[int, int]:
     """
     jsonl_path の全レコードを走査し、年別 JSONL として保存する。
+    done_pairs に含まれるペアはスキップする（重複排除）。
 
     JSONL レコード形式:
       source, target,
@@ -103,7 +125,7 @@ def process_file(
     """
     buckets: dict[str, list[str]] = defaultdict(list)
 
-    total = 0
+    total = skipped = 0
     with open(jsonl_path, encoding="utf-8") as f:
         for lineno, line in enumerate(f, 1):
             line = line.strip()
@@ -115,10 +137,14 @@ def process_file(
                 print(f"  [WARN] JSON parse error {jsonl_path}:{lineno}: {e}", file=sys.stderr)
                 continue
 
-            total += 1
             src = rec["source"]
             tgt = rec["target"]
 
+            if (src, tgt) in done_pairs:
+                skipped += 1
+                continue
+
+            total += 1
             src_meta = patent_index.get(src, {})
             tgt_meta = patent_index.get(tgt, {})
             year     = src_meta.get("year") or _year_from_images(rec)
@@ -148,7 +174,7 @@ def process_file(
         with open(out_path, "a", encoding="utf-8") as fout:
             fout.write("\n".join(lines) + "\n")
 
-    return total
+    return total, skipped
 
 
 # ---------------------------------------------------------------------------
@@ -158,18 +184,20 @@ def main():
     OUT_JSONL_DIR.mkdir(parents=True, exist_ok=True)
 
     patent_index = build_patent_index(CSV_DIR, PATENT_INDEX_CACHE)
+    done_pairs   = load_done_pairs(OUT_JSONL_DIR)
 
     jsonl_files = sorted(RESULTS_DIR.glob("*.jsonl"))
     if not jsonl_files:
         print(f"JSONL ファイルが見つかりません: {RESULTS_DIR}")
         sys.exit(1)
 
-    total = 0
+    total_new = total_skip = 0
     for path in jsonl_files:
         print(f"処理中: {path.name}")
-        n = process_file(path, OUT_JSONL_DIR, patent_index)
-        print(f"  → {n} 件")
-        total += n
+        n_new, n_skip = process_file(path, OUT_JSONL_DIR, patent_index, done_pairs)
+        print(f"  → 新規 {n_new} 件  スキップ {n_skip} 件")
+        total_new  += n_new
+        total_skip += n_skip
 
     jsonl_files_out = sorted(OUT_JSONL_DIR.glob("*.jsonl"))
     if jsonl_files_out:
@@ -178,7 +206,7 @@ def main():
             n = sum(1 for _ in open(p, encoding="utf-8") if _.strip())
             print(f"  {p.name}: {n} 件")
 
-    print(f"\n完了: 合計 {total} 件")
+    print(f"\n完了: 新規 {total_new} 件  スキップ {total_skip} 件")
     print(f"  JSONL → {OUT_JSONL_DIR.resolve()}")
 
 
