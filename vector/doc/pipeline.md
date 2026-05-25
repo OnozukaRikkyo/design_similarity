@@ -256,9 +256,16 @@ python vector/join_judgments.py        --class D10
 
 ## judge_cited_pairs.py 更新後の下流データ更新
 
-→ **[judge_cited_pairs_downstream.md](../../judge_cited_pairs_downstream.md)**
+→ **[UPDATE.md](../../UPDATE.md)（最初に読むべきガイド）**
 
-Step 1〜4 は変更不要。`join_judgments.py`（Step 5）と分析スクリプトのみ再実行する。
+```bash
+cd /home/sonozuka/design_similarity
+python update_downstream.py       # 通常の更新（qwen_similarity_results/ が進んだとき）
+python update_downstream.py --with-vector --no-gpu  # ベクトルインデックスから再構築
+```
+
+`update_downstream.py` がすべての下流処理（Step G〜F と分析図）を一括で実行する。
+Step 1〜4（`vector/run_pipeline.py`）は新クラス・新年追加時のみ必要で、通常の更新には不要。
 
 ---
 
@@ -370,7 +377,7 @@ python add_class_to_edge_list.py
 # 出力: /mnt/eightthdd/uspto/edge_list_with_class/{year}.csv
 ```
 
-> **現状（2026-05-24 確認済み）**: 2007〜2022 全年生成済み。
+> **現状（2026-05-25 確認済み）**: 2007〜2022 全年生成済み。
 
 #### 4. 全クラスベクトル生成（cited_image_vectors/）
 

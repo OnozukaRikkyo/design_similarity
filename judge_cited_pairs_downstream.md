@@ -10,16 +10,12 @@
 
 ```bash
 cd /home/sonozuka/design_similarity
-
-# 全下流を一括更新（毎回このコマンドだけでよい）
-python update_downstream.py
-
-# 特定ステップ以降のみ実行（例: Step D 以降）
-python update_downstream.py --from-step D
-
-# 別クラス指定
-python update_downstream.py --class D10
+python update_downstream.py              # 通常の更新
+python update_downstream.py --with-graph # グラフ解析も含む
+python update_downstream.py --from-step G  # G 以降だけ再実行
 ```
+
+詳細 → [UPDATE.md](UPDATE.md)
 
 ### ステップ一覧
 

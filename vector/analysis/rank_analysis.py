@@ -3,14 +3,19 @@
 ランク検索結果の統計分析・可視化。
 
 事前に join_judgments.py を実行して rank_judgments/ を生成しておくこと。
+通常は update_downstream.py の Step H として自動実行される。
 
-出力:
-  vector/output/{CLASS}/{sim_func}/
-    rank_ccdf_{type}.png     — Figure 1: 順位の CCDF（log-log、Yes/No 別）
-    rank_scatter_{type}.png  — Figure 2: 順位 vs 類似度の散布図（全件、Yes/No 別マーカー）
-
-  /mnt/eightthdd/uspto/class/{CLASS}/rank_analysis/{sim_func}/{type}/pair_comparison/
-    {src}--{tgt}_rank{r:03d}.png  — Figure 3: Rank ≤ topk の全 Yes ペア（各1枚）
+出力: vector/output/{CLASS}/{sim_func}/
+  sim_histogram_{type}.png           — コサイン類似度分布（全件グレー + Yes 青）
+  rank_ccdf_{type}.png               — Figure 1: 順位の CCDF（log-log）
+  rank_scatter_{type}.png            — Figure 2: 順位 vs 類似度 散布図
+  rank_scatter_{type}_zoom.png       — Figure 2b: 拡大（rank≤20, sim≥0.85）
+  rank_density_{type}.png            — Figure 2d: 2D 密度マップ（KDE）
+  rank_density_{type}_zoom.png       — Figure 2d-zoom: 拡大
+  rank_density_{type}_loglog.png     — Figure 2d: ログ rank 軸
+  rank_density_{type}_loglog_zoom.png
+  high_sim_{type}_0950.csv           — similarity≥0.95 の全レコード
+  high_sim_{type}_0950_judged.csv    — similarity≥0.95（Unknown 除外）
 
 実行:
     python vector/analysis/rank_analysis.py --class D18
@@ -126,6 +131,49 @@ def load_joined(target_class: str, sim_func: str, img_type: str) -> list[dict]:
         for line in fp.read_text().splitlines()
         if line.strip() and json.loads(line).get("type") == img_type
     ]
+
+# ---------------------------------------------------------------------------
+# Figure 0: Cosine similarity histogram（物理学論文スタイル）
+# ---------------------------------------------------------------------------
+def plot_sim_histogram(records: list[dict], img_type: str, out_path: Path) -> None:
+    all_sims = np.array([r["similarity"] for r in records], dtype=float)
+    yes_sims = np.array([r["similarity"] for r in records if r["judgment"] == "Yes"], dtype=float)
+
+    n_all = len(all_sims)
+    n_yes = len(yes_sims)
+
+    # ビン幅 0.01、下限は最小値を 0.05 単位で切り下げ
+    lo = float(np.floor(all_sims.min() / 0.05) * 0.05)
+    bins = np.arange(lo, 1.0 + 1e-9, 0.01)
+
+    fig, ax = plt.subplots(figsize=(COLUMN_W, 2.8))
+
+    # 全件: stepfilled（グレー塗り + 枠線）
+    ax.hist(
+        all_sims, bins=bins,
+        histtype="stepfilled",
+        facecolor="#cccccc", edgecolor="#666666", linewidth=0.5,
+        label=f"All ($N={n_all}$)", zorder=2,
+    )
+    # 類似ペア（Yes）: stepfilled（青塗り + 枠線）、前面に重ねる
+    ax.hist(
+        yes_sims, bins=bins,
+        histtype="stepfilled",
+        facecolor="#4393c3", edgecolor="#2166ac", linewidth=0.5,
+        label=f"Similar ($N={n_yes}$)", zorder=3,
+    )
+
+    ax.set_xlabel("Cosine similarity")
+    ax.set_ylabel("Count")
+    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(5))
+    ax.yaxis.set_minor_locator(ticker.AutoMinorLocator(5))
+    ax.legend(fontsize=7.5, framealpha=0.85, edgecolor="gray", loc="upper left")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path)
+    plt.close(fig)
+    print(f"  -> {out_path}")
+
 
 # ---------------------------------------------------------------------------
 # Figure 1: CCDF of rank（log-log）
@@ -589,12 +637,17 @@ def main() -> None:
     # n_nonexact = sum(1 for r in records if r.get("_label") == "Yes_nonexact")
     # print(f"  Exact match: {n_exact}  /  Non-exact similar: {n_nonexact}")
 
-    # ── Figure 1: CCDF ──────────────────────────────────────────
+    # ── Figure 0: Similarity histogram ─────────────────────────
     _set_style_stats()
     out_stats = OUT_BASE / args.target_class / args.sim
     out_stats.mkdir(parents=True, exist_ok=True)
 
-    print("\n[1/3] Plotting CCDF...")
+    print("\n[0] Plotting similarity histogram...")
+    plot_sim_histogram(records, args.img_type,
+                       out_stats / f"sim_histogram_{args.img_type}.png")
+
+    # ── Figure 1: CCDF ──────────────────────────────────────────
+    print("[1/3] Plotting CCDF...")
     plot_ccdf(records, args.img_type,
               out_stats / f"rank_ccdf_{args.img_type}.png")
 
