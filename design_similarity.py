@@ -212,12 +212,25 @@ def _write_error_log(image1: str, image2: str, exc: BaseException) -> Path:
     return log_file
 
 
+def _clean_json(text: str) -> str:
+    import re
+    # 整数キー行を除去 (例: `  1: 3,`)
+    text = re.sub(r'^\s*\d+\s*:.*\n?', '', text, flags=re.MULTILINE)
+    # 末尾カンマを除去 (例: `"key": "val",}`)
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+    return text
+
+
 def _parse_json_result(raw: str, image1: str, image2: str) -> dict:
     """raw テキストから JSON を抽出してパースする。失敗時は sys.exit。"""
     try:
         start = raw.index("{")
         end = raw.rindex("}") + 1
-        result = json.loads(raw[start:end])
+        json_text = raw[start:end]
+        try:
+            result = json.loads(json_text)
+        except json.JSONDecodeError:
+            result = json.loads(_clean_json(json_text))
     except (ValueError, json.JSONDecodeError):
         log_dir = Path(__file__).parent / "log"
         log_dir.mkdir(exist_ok=True)
