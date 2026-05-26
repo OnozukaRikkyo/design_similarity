@@ -1,30 +1,34 @@
 """
-Watts & Strogatz (1998) 局所クラスタリング係数による triadic スコアリング。
+Watts-Strogatz 局所クラスタリング係数による triadic スコアリング。
 
 ## 理論
 
-各ノード v の局所クラスタリング係数 (Watts & Strogatz 1998):
+Barabási (2016) に従い、無向引用グラフの各ノード v に対して局所クラスタリング係数を計算:
 
-    C_v = 2 * |{(u,w) ∈ E : u,w ∈ N(v), u≠w}| / (k_v * (k_v - 1))
+    C_v = 2 * L_v / (k_v * (k_v - 1))    (k_v >= 2 のとき、k_v < 2 のとき 0)
 
-ここで N(v) は v の近傍集合、k_v = |N(v)|。
+ここで k_v はノード v の次数、L_v は v の近傍ノード間に存在する辺数。
+C_v は v の引用近傍がどれだけ密に接続しているかを示す。C_v ∈ [0, 1]。
 
-各三角形 (A, B, C) の WCC スコア:
+各閉引用三角形 (A, B, C) に対して局所引用支持スコアを定義:
 
-    S_WCC = min(C_A, C_B, C_C)
+    S2 = min(C_A, C_B, C_C)
 
-S_WCC が小さい三角形は、少なくとも 1 頂点が密なクラスタに属していない
-(= グラフ上で孤立した橋渡し的な位置にある) ことを意味し、
-装飾クラスタとしての整合性が低いと解釈される。
+S2 はすべての3頂点が局所的に密な引用近傍に埋め込まれているときのみ高くなる。
+
+計算は **無重み無向グラフ** に対して行う（networkx.clustering を使用）。
+重み付きグラフを渡すと Barrat 式（加重クラスタリング）になり結果が変わるため注意。
 
 依拠文献:
+    Barabási, A.-L. (2016). Network science. Cambridge University Press.
+    Opsahl, T. & Panzarasa, P. (2009). Clustering in weighted networks.
+    Social Networks, 31(2):155–163.
     Watts, D.J. & Strogatz, S.H. (1998). Collective dynamics of 'small-world' networks.
-    Nature, 393(6684), 440–442.
+    Nature, 393:440–442.
 """
 
 import json
 import statistics
-from itertools import combinations
 from pathlib import Path
 
 import networkx as nx
@@ -57,6 +61,18 @@ def load_data(path: Path) -> list[dict]:
 # グラフ構築
 # ==============================================================================
 
+def build_citation_graph(data: list[dict]) -> nx.Graph:
+    """無重み無向引用グラフを構築する。局所クラスタリング係数の計算に使用。
+
+    networkx.clustering() は重み付きグラフに対して Barrat 式（加重クラスタリング）を
+    使うため、Watts-Strogatz 係数を得るには必ず無重みグラフを渡すこと。
+    """
+    G = nx.Graph()
+    for d in data:
+        G.add_edge(d['source'], d['target'])
+    return G
+
+
 def build_similarity_graph(data: list[dict]) -> nx.Graph:
     G = nx.Graph()
     for d in data:
@@ -88,77 +104,34 @@ def enumerate_triangles(G: nx.Graph) -> list[tuple]:
     return triangles
 
 
-# ==============================================================================
-# Watts-Strogatz 局所クラスタリング係数
-# ==============================================================================
-
-def compute_clustering_coefficients(adj: dict[str, set]) -> dict[str, float]:
-    """
-    Watts & Strogatz (1998) 局所クラスタリング係数。
-
-    C_v = (2 * triangles_at_v) / (k_v * (k_v - 1))
-
-    triangles_at_v = |{(u,w) ∈ E : u,w ∈ N(v), u≠w}|
-    """
-    C = {}
-    for v, N in adj.items():
-        k = len(N)
-        if k < 2:
-            C[v] = 0.0
-            continue
-        triangles_at_v = sum(1 for u, w in combinations(N, 2) if w in adj[u])
-        C[v] = triangles_at_v / (k * (k - 1) / 2)
-    return C
-
-
-def score_wcc(C_a: float, C_b: float, C_c: float) -> float:
-    """S_WCC = min(C_A, C_B, C_C)"""
-    return min(C_a, C_b, C_c)
-
 
 # ==============================================================================
 # Visualization
 # ==============================================================================
 
 def plot_wcc_distribution(results: list[dict], output_path: Path) -> None:
-    """S_WCC の分布と各頂点の C_v 分布を 3 パネルで描画する。"""
+    """S_WCC = min(C_A, C_B, C_C) (Watts-Strogatz 局所クラスタリング係数) の分布を描画する。"""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     import numpy as np
 
     wcc_vals = [r['score_wcc'] for r in results]
-    c_a_vals = [r['C_A'] for r in results]
-    c_b_vals = [r['C_B'] for r in results]
-    c_c_vals = [r['C_C'] for r in results]
 
-    panels = [
-        (wcc_vals,
-         'S_WCC = min(C_A, C_B, C_C)\n(per triangle)',
-         '# triangles', '#ee6677'),
-        (c_a_vals,
-         'C_A — clustering coeff of vertex A\n(per triangle)',
-         '# triangles', '#4477aa'),
-        (c_b_vals + c_c_vals,
-         'C_B ∪ C_C — vertices B & C combined\n(per triangle × 2)',
-         '# occurrences', '#66ccee'),
-    ]
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4), facecolor='#f5f5f5')
-    for ax, (vals, title, ylabel, color) in zip(axes, panels):
-        ax.set_facecolor('#f5f5f5')
-        ax.hist(vals, bins=40, color=color, alpha=0.8, edgecolor='white', linewidth=0.4)
-        ax.set_title(title, fontsize=9)
-        ax.set_xlabel('Score', fontsize=8)
-        ax.set_ylabel(ylabel, fontsize=8)
-        ax.tick_params(labelsize=7)
-        med = float(np.median(vals))
-        ax.axvline(med, color='#333333', linewidth=1.0, linestyle='--',
-                   label=f'median={med:.3f}')
-        ax.legend(fontsize=6.5)
+    fig, ax = plt.subplots(1, 1, figsize=(6, 4), facecolor='#f5f5f5')
+    ax.set_facecolor('#f5f5f5')
+    ax.hist(wcc_vals, bins=40, color='#ee6677', alpha=0.8, edgecolor='white', linewidth=0.4)
+    ax.set_title('S_WCC = min(C_A, C_B, C_C)\n(Watts-Strogatz local clustering, per triangle)', fontsize=9)
+    ax.set_xlabel('Score', fontsize=8)
+    ax.set_ylabel('# triangles', fontsize=8)
+    ax.tick_params(labelsize=7)
+    med = float(np.median(wcc_vals))
+    ax.axvline(med, color='#333333', linewidth=1.0, linestyle='--',
+               label=f'median={med:.3f}')
+    ax.legend(fontsize=6.5)
 
     fig.suptitle(
-        f'D18 — Watts-Strogatz Clustering Coefficient Score  ({len(results)} triangles)',
+        f'D18 — Watts-Strogatz Local Clustering Score  ({len(results)} triangles)',
         fontsize=11,
     )
     plt.tight_layout()
@@ -166,72 +139,6 @@ def plot_wcc_distribution(results: list[dict], output_path: Path) -> None:
     plt.close(fig)
     print(f'WCC distribution figure → {output_path}')
 
-
-def plot_node_clustering(G: nx.Graph, clustering: dict[str, float], output_path: Path) -> None:
-    """全ノードの C_v 分布・次数との関係を 3 パネルで描画する。"""
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    nodes_ordered = list(G.nodes())
-    deg_arr = np.array([G.degree(n) for n in nodes_ordered])
-    cv_arr  = np.array([clustering[n] for n in nodes_ordered])
-    cv_vals = cv_arr.tolist()
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4), facecolor='#f5f5f5')
-
-    # ---- Panel 1: C_v histogram ----
-    ax = axes[0]
-    ax.set_facecolor('#f5f5f5')
-    ax.hist(cv_vals, bins=30, color='#4477aa', alpha=0.8, edgecolor='white', linewidth=0.4)
-    ax.set_title(f'Node C_v distribution\n({len(cv_vals)} nodes)', fontsize=9)
-    ax.set_xlabel('C_v (local clustering coefficient)', fontsize=8)
-    ax.set_ylabel('# nodes', fontsize=8)
-    ax.tick_params(labelsize=7)
-    med = float(np.median(cv_vals))
-    ax.axvline(med, color='#333', linewidth=1.0, linestyle='--', label=f'median={med:.3f}')
-    ax.legend(fontsize=6.5)
-
-    # ---- Panel 2: degree vs C_v scatter ----
-    ax = axes[1]
-    ax.set_facecolor('#f5f5f5')
-    ax.scatter(deg_arr, cv_arr, alpha=0.45, s=8, color='#66ccee', rasterized=True)
-    ax.set_title('Degree vs. C_v\n(each node)', fontsize=9)
-    ax.set_xlabel('Degree k_v', fontsize=8)
-    ax.set_ylabel('C_v', fontsize=8)
-    ax.tick_params(labelsize=7)
-    corr = float(np.corrcoef(deg_arr, cv_arr)[0, 1])
-    ax.text(0.97, 0.97, f'r = {corr:.3f}', transform=ax.transAxes,
-            ha='right', va='top', fontsize=7.5,
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-
-    # ---- Panel 3: C_v category breakdown ----
-    ax = axes[2]
-    ax.set_facecolor('#f5f5f5')
-    n_total = len(cv_vals)
-    n_zero  = sum(1 for v in cv_vals if v == 0.0)
-    n_one   = sum(1 for v in cv_vals if v == 1.0)
-    n_mid   = n_total - n_zero - n_one
-    labels  = ['C_v = 0', '0 < C_v < 1', 'C_v = 1']
-    counts  = [n_zero, n_mid, n_one]
-    colors  = ['#ee6677', '#4477aa', '#228833']
-    bars = ax.bar(labels, [c / n_total for c in counts],
-                  color=colors, alpha=0.85, edgecolor='white')
-    ax.set_title('Node C_v category breakdown', fontsize=9)
-    ax.set_ylabel('Fraction of nodes', fontsize=8)
-    ax.tick_params(labelsize=7)
-    for bar, cnt in zip(bars, counts):
-        ax.text(bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.005,
-                f'{cnt} ({cnt/n_total:.1%})',
-                ha='center', va='bottom', fontsize=7.5)
-
-    fig.suptitle('D18 — Node-level Clustering Coefficient (Watts & Strogatz 1998)', fontsize=11)
-    plt.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches='tight', facecolor=fig.get_facecolor())
-    plt.close(fig)
-    print(f'Node clustering figure → {output_path}')
 
 
 def plot_wcc_vs_scores(
@@ -331,7 +238,7 @@ def plot_wcc_threshold_grid(
                        fontsize=16, rotation=45, ha='right')
     ax.set_yticks(range(n_s1))
     ax.set_yticklabels([f'{t:.3f}' for t in ths_s1], fontsize=16)
-    ax.set_xlabel(r'$T_2$ (Watts-Strogatz clustering threshold)', fontsize=24)
+    ax.set_xlabel(r'$T_2$ (Local Clustering Coefficient threshold)', fontsize=24)
     ax.set_ylabel(r'$T_1$ (weakest-link threshold)', fontsize=24)
 
     for i in range(n_s1):
@@ -437,23 +344,18 @@ def main() -> list[dict]:
     G = build_similarity_graph(data)
     print(f'|V| = {G.number_of_nodes()}  |E| = {G.number_of_edges()}')
 
-    # ------------------------------------------------------------------
-    # Watts-Strogatz 局所クラスタリング係数
-    # ------------------------------------------------------------------
-    print_section('Watts-Strogatz Clustering Coefficients')
-    adj = {n: set(G.neighbors(n)) for n in G.nodes()}
-    clustering = compute_clustering_coefficients(adj)
-
-    cv_vals = list(clustering.values())
-    cv_sorted = sorted(cv_vals)
-    n_cv = len(cv_vals)
-    print(f'  C_v  min={cv_sorted[0]:.4f}  '
-          f'median={cv_sorted[n_cv // 2]:.4f}  '
-          f'max={cv_sorted[-1]:.4f}')
-    print(f'  C_v = 0.0 : {sum(1 for v in cv_vals if v == 0.0)} nodes '
-          f'({sum(1 for v in cv_vals if v == 0.0) / n_cv:.1%})')
-    print(f'  C_v = 1.0 : {sum(1 for v in cv_vals if v == 1.0)} nodes '
-          f'({sum(1 for v in cv_vals if v == 1.0) / n_cv:.1%})')
+    # 局所クラスタリング係数は無重み無向グラフで計算する。
+    # nx.clustering() は重み付きグラフを渡すと Barrat 加重式を使うため
+    # Watts-Strogatz の結果と異なる値になる。
+    G_unweighted = build_citation_graph(data)
+    clustering = nx.clustering(G_unweighted)
+    cv_vals_all = list(clustering.values())
+    print(f'  Local clustering: min={min(cv_vals_all):.4f}  '
+          f'median={statistics.median(cv_vals_all):.4f}  '
+          f'max={max(cv_vals_all):.4f}')
+    n_zero = sum(1 for v in cv_vals_all if v == 0.0)
+    n_one  = sum(1 for v in cv_vals_all if v == 1.0)
+    print(f'  C_v=0: {n_zero}  C_v=1: {n_one}  0<C_v<1: {len(cv_vals_all)-n_zero-n_one}')
 
     # ------------------------------------------------------------------
     # 三角形列挙 + S_WCC スコアリング
@@ -467,12 +369,12 @@ def main() -> list[dict]:
         s_ab = G[a][b]['sim']
         s_bc = G[b][c]['sim']
         s_ac = G[a][c]['sim']
-        c_a, c_b, c_c = clustering[a], clustering[b], clustering[c]
+        # S2 = min(C_A, C_B, C_C): 3頂点の局所クラスタリング係数の最小値
+        wcc = min(clustering[a], clustering[b], clustering[c])
         results.append({
             'A': a, 'B': b, 'C': c,
             's_AB': s_ab, 's_BC': s_bc, 's_AC': s_ac,
-            'C_A': c_a, 'C_B': c_b, 'C_C': c_c,
-            'score_wcc': score_wcc(c_a, c_b, c_c),
+            'score_wcc': wcc,
         })
 
     results.sort(key=lambda r: -r['score_wcc'])
@@ -484,12 +386,10 @@ def main() -> list[dict]:
 
     print(f'\n  Top 20 triangles by S_WCC:')
     print(f'  {"rank":>4}  {"A":10}  {"B":10}  {"C":10}  '
-          f'{"s_AB":6}  {"s_BC":6}  {"s_AC":6}  '
-          f'{"C_A":6}  {"C_B":6}  {"C_C":6}  {"wcc":6}')
+          f'{"s_AB":6}  {"s_BC":6}  {"s_AC":6}  {"wcc":6}')
     for i, r in enumerate(results[:20], 1):
         print(f'  {i:4d}  {r["A"]:10}  {r["B"]:10}  {r["C"]:10}  '
               f'{r["s_AB"]:.4f}  {r["s_BC"]:.4f}  {r["s_AC"]:.4f}  '
-              f'{r["C_A"]:.4f}  {r["C_B"]:.4f}  {r["C_C"]:.4f}  '
               f'{r["score_wcc"]:.4f}')
 
     # ------------------------------------------------------------------
@@ -519,7 +419,6 @@ def main() -> list[dict]:
                 ex = scored_map[key]
                 row['score_weakest_link']      = ex['score_weakest_link']
                 row['score_angular_tightness'] = ex['score_angular_tightness']
-                row['score_bound_compliance']  = ex['score_bound_compliance']
                 row['score_snn']               = ex['score_snn']
                 row['confidence']              = ex['confidence']
             f.write(json.dumps(row) + '\n')
@@ -533,10 +432,6 @@ def main() -> list[dict]:
     plot_wcc_distribution(
         results,
         OUTPUT_DIR / 'wcc_distribution.png',
-    )
-    plot_node_clustering(
-        G, clustering,
-        OUTPUT_DIR / 'wcc_node_clustering.png',
     )
     if scored_map:
         plot_wcc_vs_scores(
@@ -555,6 +450,7 @@ def main() -> list[dict]:
         plot_wcc_threshold_grid(
             s1_arr, wcc_arr,
             OUTPUT_DIR / 'wcc_threshold_grid.png',
+            bold_range=None,
         )
 
     print('\nFP/FN WCC grids ...')
