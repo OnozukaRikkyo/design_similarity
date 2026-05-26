@@ -214,8 +214,8 @@ def _write_error_log(image1: str, image2: str, exc: BaseException) -> Path:
 
 def _clean_json(text: str) -> str:
     import re
-    # 整数キー行を除去 (例: `  1: 3,`)
-    text = re.sub(r'^\s*\d+\s*:.*\n?', '', text, flags=re.MULTILINE)
+    # 整数のみ・整数キー行を除去 (例: `  1`, `  1: 3,`)
+    text = re.sub(r'^\s*\d+\s*(?::.*)?,?\n?', '', text, flags=re.MULTILINE)
     # 末尾カンマを除去 (例: `"key": "val",}`)
     text = re.sub(r',\s*([}\]])', r'\1', text)
     return text
