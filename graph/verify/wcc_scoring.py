@@ -238,8 +238,8 @@ def plot_wcc_threshold_grid(
                        fontsize=16, rotation=45, ha='right')
     ax.set_yticks(range(n_s1))
     ax.set_yticklabels([f'{t:.3f}' for t in ths_s1], fontsize=16)
-    ax.set_xlabel(r'$T_2$ (Local Clustering Coefficient threshold)', fontsize=24)
-    ax.set_ylabel(r'$T_1$ (weakest-link threshold)', fontsize=24)
+    ax.set_xlabel('T2 (Local Clustering Coefficient threshold)', fontsize=24)
+    ax.set_ylabel('T1 (weakest-link threshold)', fontsize=24)
 
     for i in range(n_s1):
         for j in range(n_wcc):
