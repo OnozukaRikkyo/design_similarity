@@ -58,6 +58,25 @@ _META_FS    = 7.5
 _REASON_FS  = 7.5
 
 # ==============================================================================
+# フィルタユーティリティ
+# ==============================================================================
+
+def has_consecutive_d_ids(A: str, B: str, C: str) -> bool:
+    """3頂点のうち2つのD番号が連番（数値部分の差が1）であればTrueを返す。
+
+    例: D0538842 と D0538843 は連番 → True
+    D以外で始まるIDは無視する。
+    """
+    def _num(pid: str) -> int | None:
+        if pid.startswith('D') and pid[1:].isdigit():
+            return int(pid[1:])
+        return None
+
+    nums = sorted(n for p in (A, B, C) if (n := _num(p)) is not None)
+    return any(nums[i + 1] - nums[i] == 1 for i in range(len(nums) - 1))
+
+
+# ==============================================================================
 # データ読み込み
 # ==============================================================================
 
@@ -193,15 +212,12 @@ def _panel(ax: plt.Axes, img_path: str | None, patent_id: str,
 
 _REASON_WRAP = 100   # 1行あたりの最大文字数
 
-def _reason_panel(ax: plt.Axes, edge_arrows: list[dict]) -> None:
+def _reason_panel(ax: plt.Axes, edge_arrows: list[dict],
+                  show_rank_conf: bool = True) -> None:
     """有向グラフ矢印 + reason を 1 パネルに表示する。
 
-    フォーマット:
-      A→B  [Yes]  sim=X.XXXX  rank=N
-        reason: Lorem ipsum...
-
-      A→C  [Yes]  sim=X.XXXX  rank=N
-        ...
+    Args:
+        show_rank_conf: False のとき rank / conf を省略する。
     """
     ax.axis('off')
 
@@ -212,12 +228,15 @@ def _reason_panel(ax: plt.Axes, edge_arrows: list[dict]) -> None:
         tag = '  ← completing' if item['is_completing'] else ''
 
         if rec:
-            jdg  = rec.get('judgment', '?')
-            sim  = rec.get('similarity', float('nan'))
-            rank = rec.get('rank', '?')
-            conf = rec.get('confidence', '?')
-            header = (f'{arrow}  [{jdg}]  sim={sim:.4f}  '
-                      f'rank={rank}  conf={conf}{tag}')
+            jdg = rec.get('judgment', '?')
+            sim = rec.get('similarity', float('nan'))
+            if show_rank_conf:
+                rank = rec.get('rank', '?')
+                conf = rec.get('confidence', '?')
+                header = (f'{arrow}  [{jdg}]  sim={sim:.4f}  '
+                          f'rank={rank}  conf={conf}{tag}')
+            else:
+                header = f'{arrow}  [{jdg}]  Cosine similarity={sim:.4f}{tag}'
         else:
             header = f'{arrow}  [?]{tag}'
 
@@ -249,6 +268,15 @@ def _reason_panel(ax: plt.Axes, edge_arrows: list[dict]) -> None:
 # 公開: 単一 triad 画像描画
 # ==============================================================================
 
+_DEFAULT_META_SCORES = [
+    ('score_weakest_link',      'S1(wl)'),
+    ('score_wcc',               'S2(cc)'),
+    ('score_angular_tightness', 'S3(at)'),
+    ('score_snn',               'S4(snn)'),
+    ('confidence',              'conf  '),
+]
+
+
 def plot_triad(
     triad: dict,
     seq: int,
@@ -259,16 +287,22 @@ def plot_triad(
     suptitle: str = '',
     extra_meta: list[str] | None = None,
     border_colors: tuple[str | None, str | None, str | None] = (None, None, None),
+    caption_fn: 'Callable[[dict, str], str] | None' = None,
+    meta_scores: 'list[tuple[str, str]] | None' = None,
+    show_meta_header: bool = True,
+    show_meta_panel: bool = True,
+    show_rank_conf: bool = True,
 ) -> None:
     """triad を画像パネル + メタ情報 + 有向グラフ reason 付きで保存する。
-
-    レイアウト:
-      上段: [Image A] [Image B] [Image C] [Meta]
-      下段: [A→B / A→C / B↔C の矢印 + reason テキスト (全幅)]
 
     Args:
         extra_meta: メタパネルに追加するテキスト行。
         border_colors: (A, B, C) 各パネルのスパイン色。None = デフォルト灰色。
+        caption_fn: (triad, panel) → str。省略時はエッジ類似度を表示。
+        meta_scores: メタパネルのスコア行リスト。省略時はデフォルト全スコア。
+        show_meta_header: False のとき seq/rank/辺テーブルを省略。
+        show_meta_panel: False のとき右メタパネルを非表示・3列レイアウトに切替。
+        show_rank_conf: False のとき下段の rank/conf を省略。
     """
     A, B, C = triad['A'], triad['B'], triad['C']
     s_AB = triad['s_AB']
@@ -287,37 +321,41 @@ def plot_triad(
     jdg_BC = _jdg(key_BC)
     jdg_AC = _jdg(key_AC)
 
-    def _cap(sim: float, jdg: str, label: str) -> str:
-        return f'{label}: {sim:.4f} [{jdg}]'
-
-    cap_A = f'{_cap(s_AB, jdg_AB, "AB")}  {_cap(s_AC, jdg_AC, "AC")}'
-    cap_B = f'{_cap(s_AB, jdg_AB, "AB")}  {_cap(s_BC, jdg_BC, "BC")}'
-    cap_C = f'{_cap(s_BC, jdg_BC, "BC")}  {_cap(s_AC, jdg_AC, "AC")}'
+    if caption_fn is not None:
+        cap_A = caption_fn(triad, 'A')
+        cap_B = caption_fn(triad, 'B')
+        cap_C = caption_fn(triad, 'C')
+    else:
+        def _cap(sim: float, jdg: str, label: str) -> str:
+            return f'{label}: {sim:.4f} [{jdg}]'
+        cap_A = f'{_cap(s_AB, jdg_AB, "AB")}  {_cap(s_AC, jdg_AC, "AC")}'
+        cap_B = f'{_cap(s_AB, jdg_AB, "AB")}  {_cap(s_BC, jdg_BC, "BC")}'
+        cap_C = f'{_cap(s_BC, jdg_BC, "BC")}  {_cap(s_AC, jdg_AC, "AC")}'
 
     # --- メタ情報 ---
-    meta_lines: list[str] = [
-        f'seq   : {seq}',
-        f'rank  : {triad.get("rank", "?")}',
-        '─' * 26,
-    ]
-    for key, label in [
-        ('score_weakest_link',      'S1(wl)'),
-        ('score_wcc',               'S2(cc)'),
-        ('score_angular_tightness', 'S3(at)'),
-        ('score_snn',               'S4(snn)'),
-        ('confidence',              'conf  '),
-    ]:
+    if show_meta_header:
+        meta_lines: list[str] = [
+            f'seq   : {seq}',
+            f'rank  : {triad.get("rank", "?")}',
+            '─' * 26,
+        ]
+    else:
+        meta_lines = []
+
+    _scores = meta_scores if meta_scores is not None else _DEFAULT_META_SCORES
+    for key, label in _scores:
         if key in triad:
             meta_lines.append(f'{label}: {triad[key]:.4f}')
 
-    meta_lines += [
-        '─' * 26,
-        'edge  sim    jdg',
-        '─' * 26,
-        f'AB   {s_AB:.4f}  {jdg_AB}',
-        f'BC   {s_BC:.4f}  {jdg_BC}',
-        f'AC   {s_AC:.4f}  {jdg_AC}',
-    ]
+    if show_meta_header:
+        meta_lines += [
+            '─' * 26,
+            'edge  sim    jdg',
+            '─' * 26,
+            f'AB   {s_AB:.4f}  {jdg_AB}',
+            f'BC   {s_BC:.4f}  {jdg_BC}',
+            f'AC   {s_AC:.4f}  {jdg_AC}',
+        ]
     if extra_meta:
         meta_lines += ['─' * 26] + extra_meta
 
@@ -326,40 +364,52 @@ def plot_triad(
 
     # --- レイアウト ---
     CELL_W  = 2.1
-    CELL_H  = 3.4
+    CELL_H  = 2.4
     REASON_H = 2.2   # 下段 reason パネルの高さ
 
-    fig = plt.figure(figsize=(CELL_W * 4, CELL_H + REASON_H), facecolor='white')
-    gs = gridspec.GridSpec(
-        2, 4, figure=fig,
-        height_ratios=[CELL_H, REASON_H],
-        width_ratios=[1, 1, 1, 1.15],
-        hspace=0.05,
-        wspace=0.28,
-        left=0.01, right=0.99,
-        top=0.93, bottom=0.02,
-    )
-
-    ax_A      = fig.add_subplot(gs[0, 0])
-    ax_B      = fig.add_subplot(gs[0, 1])
-    ax_C      = fig.add_subplot(gs[0, 2])
-    ax_meta   = fig.add_subplot(gs[0, 3])
-    ax_reason = fig.add_subplot(gs[1, :])   # 下段全幅
+    if show_meta_panel:
+        fig = plt.figure(figsize=(CELL_W * 4, CELL_H + REASON_H), facecolor='white')
+        gs = gridspec.GridSpec(
+            2, 4, figure=fig,
+            height_ratios=[CELL_H, REASON_H],
+            width_ratios=[1, 1, 1, 1.15],
+            hspace=0.02, wspace=0.28,
+            left=0.01, right=0.99, top=0.93, bottom=0.02,
+        )
+        ax_A      = fig.add_subplot(gs[0, 0])
+        ax_B      = fig.add_subplot(gs[0, 1])
+        ax_C      = fig.add_subplot(gs[0, 2])
+        ax_meta   = fig.add_subplot(gs[0, 3])
+        ax_reason = fig.add_subplot(gs[1, :])
+    else:
+        fig = plt.figure(figsize=(CELL_W * 3, CELL_H + REASON_H), facecolor='white')
+        gs = gridspec.GridSpec(
+            2, 3, figure=fig,
+            height_ratios=[CELL_H, REASON_H],
+            width_ratios=[1, 1, 1],
+            hspace=0.20, wspace=0.28,
+            left=0.02, right=0.98, top=0.90, bottom=0.02,
+        )
+        ax_A      = fig.add_subplot(gs[0, 0])
+        ax_B      = fig.add_subplot(gs[0, 1])
+        ax_C      = fig.add_subplot(gs[0, 2])
+        ax_reason = fig.add_subplot(gs[1, :])
 
     _panel(ax_A, img_map.get(A), A, cap_A, border_colors[0])
     _panel(ax_B, img_map.get(B), B, cap_B, border_colors[1])
     _panel(ax_C, img_map.get(C), C, cap_C, border_colors[2])
 
-    ax_meta.axis('off')
-    ax_meta.text(
-        0.04, 0.97, '\n'.join(meta_lines),
-        va='top', ha='left',
-        transform=ax_meta.transAxes,
-        fontsize=_META_FS, family='monospace',
-        bbox=dict(boxstyle='round,pad=0.5', fc='#fafafa', ec='#999', alpha=0.95),
-    )
+    if show_meta_panel:
+        ax_meta.axis('off')
+        ax_meta.text(
+            0.04, 0.97, '\n'.join(meta_lines),
+            va='top', ha='left',
+            transform=ax_meta.transAxes,
+            fontsize=_META_FS, family='monospace',
+            bbox=dict(boxstyle='round,pad=0.5', fc='#fafafa', ec='#999', alpha=0.95),
+        )
 
-    _reason_panel(ax_reason, edge_arrows)
+    _reason_panel(ax_reason, edge_arrows, show_rank_conf=show_rank_conf)
 
     # reason パネルに薄い枠
     for sp in ax_reason.spines.values():
@@ -387,6 +437,11 @@ def run_analysis(
     suptitle_fn: Callable[[dict, int], str] | None = None,
     extra_meta_fn: Callable[[dict, int], list[str]] | None = None,
     border_colors_fn: Callable[[dict, int], tuple] | None = None,
+    caption_fn: 'Callable[[dict, str], str] | None' = None,
+    meta_scores: 'list[tuple[str, str]] | None' = None,
+    show_meta_header: bool = True,
+    show_meta_panel: bool = True,
+    show_rank_conf: bool = True,
 ) -> Path:
     """triads を out_base/name/triad_{i:03d}.png として一括出力する。
 
@@ -395,6 +450,11 @@ def run_analysis(
         suptitle_fn: (triad, seq) → タイトル文字列。
         extra_meta_fn: (triad, seq) → 追加メタ行リスト。
         border_colors_fn: (triad, seq) → (color_A, color_B, color_C)。
+        caption_fn: (triad, panel) → str。省略時はエッジ類似度を表示。
+        meta_scores: メタパネルのスコア行リスト。省略時はデフォルト全スコア。
+        show_meta_header: False のとき seq/rank/辺テーブルを省略。
+        show_meta_panel: False のとき右メタパネルを非表示・3列レイアウトに切替。
+        show_rank_conf: False のとき下段の rank/conf を省略。
 
     Returns:
         出力ディレクトリのパス。
@@ -410,6 +470,11 @@ def run_analysis(
             suptitle=suptitle_fn(triad, seq) if suptitle_fn else '',
             extra_meta=extra_meta_fn(triad, seq) if extra_meta_fn else None,
             border_colors=border_colors_fn(triad, seq) if border_colors_fn else (None, None, None),
+            caption_fn=caption_fn,
+            meta_scores=meta_scores,
+            show_meta_header=show_meta_header,
+            show_meta_panel=show_meta_panel,
+            show_rank_conf=show_rank_conf,
         )
         print(f'  → triad_{seq:03d}.png  '
               f'({triad["A"]}, {triad["B"]}, {triad["C"]})')

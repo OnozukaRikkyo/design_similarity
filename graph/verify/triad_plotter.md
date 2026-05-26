@@ -54,6 +54,45 @@ graph/output/D18/visualize/
 
 ---
 
+## 図の要素早見表（non-consecutive モード）
+
+`--no-consec` オプション付きで出力される図の構成。連番D-ID除去済みデータ（`wcc_no_consec.jsonl`）を使用。右メタパネルなし・3列レイアウト。
+
+### タイトル行
+
+```
+D18   S1=0.978, S2=1.000  (T1≥0.975, T2≥0.9, non-consecutive)
+```
+
+S1 = weakest-link 類似度、S2 = 局所クラスター係数 = min(C_A, C_B, C_C)。S2 の定義は[指標・略号の説明](#指標略号の説明)参照。
+
+### 上半分：画像パネル + キャプション（メタパネルなし）
+
+各パネルのキャプションはそのノードの局所クラスター係数 C_v を表示する。
+
+| パネル | キャプション例 |
+|---|---|
+| A | `Local clustering coefficient: 1.000` ← C_A（ノード A の局所クラスター係数） |
+| B | `Local clustering coefficient: 1.000` ← C_B |
+| C | `Local clustering coefficient: 1.000` ← C_C |
+
+### 下半分：有向グラフ + reason テキスト
+
+```
+D0787587→D0787590  [No]  Cosine similarity=0.9816
+  The overall shape and form differ ...
+
+D0787587→D0788844  [No]  Cosine similarity=0.9869
+  The overall shape and form differ ...
+
+D0787590↔D0788844  [No]  Cosine similarity=0.9780  ← completing
+  The two designs differ significantly ...
+```
+
+ハブ（2辺の source）からの辺は `→`、三角形を完成させる辺は `↔ ← completing` で表示する。
+
+---
+
 ## 指標・略号の説明
 
 ### タイトル行
@@ -261,11 +300,48 @@ run_analysis('my_analysis', triads, img_map, judg_map, OUT_BASE,
 
 ---
 
-## 現在の分析スクリプト一覧
+## スクリプト構成
 
-| スクリプト | サブディレクトリ | フィルタ条件 |
+### pipeline.py — データ再計算（毎回実行）
+
+WCC スコア・JSONL・グリッド画像をすべて再生成する。データが更新されたら実行する。
+
+```bash
+cd /home/sonozuka/design_similarity
+python graph/verify/pipeline.py
+```
+
+### visualize_threshold.py — triad 個別画像生成（条件を変えて都度実行）
+
+`--t1 / --t2 / --no-consec` で条件を指定する。出力ディレクトリ名は引数から自動生成される。
+
+```bash
+# 全 triad, T1=0.90, T2=0.90（デフォルト）
+python graph/verify/visualize_threshold.py
+
+# 全 triad, 閾値変更
+python graph/verify/visualize_threshold.py --t1 0.975 --t2 0.90
+
+# 連番D-ID除去済みデータ (wcc_no_consec.jsonl) を使用
+python graph/verify/visualize_threshold.py --t1 0.975 --t2 0.90 --no-consec
+```
+
+| オプション | デフォルト | 説明 |
 |---|---|---|
-| `visualize_threshold.py` | `wcc_s1_{T1}_wcc_{T2}/` | S1 ≥ T1 かつ S2 ≥ T2（デフォルト: T1=0.90, T2=0.90） |
+| `--t1` | `0.90` | S1 (weakest-link) の下限閾値 |
+| `--t2` | `0.90` | S_WCC の下限閾値 |
+| `--no-consec` | なし | `wcc_no_consec.jsonl` を使用。出力ディレクトリ末尾に `_no_consec` が付く |
+
+**出力ディレクトリの命名規則:**
+
+| 条件 | 出力先 |
+|---|---|
+| T1=0.90, T2=0.90 | `visualize/wcc_s1_0900_wcc_0900/` |
+| T1=0.975, T2=0.90 | `visualize/wcc_s1_0975_wcc_0900/` |
+| T1=0.975, T2=0.90, --no-consec | `visualize/wcc_s1_0975_wcc_0900_no_consec/` |
+
+**前提条件:**  
+`pipeline.py` を先に実行して `wcc_scored.jsonl` と `wcc_no_consec.jsonl` を最新化しておくこと。
 
 ---
 

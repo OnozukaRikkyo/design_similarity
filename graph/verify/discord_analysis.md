@@ -2,6 +2,8 @@
 
 `graph/verify/discord_analysis.py` の 1 本で以下をすべて実行する。
 
+> triad 個別画像（visualize_threshold.py 出力）の図の要素・指標定義は [triad_plotter.md](triad_plotter.md) を参照。
+
 ---
 
 ## 入力
