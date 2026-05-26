@@ -227,6 +227,12 @@ def process_year(
                         if design_similarity.BACKEND != "qwen":
                             time.sleep(5)  # Gemini レート制限対策（qwen はローカルなので不要）
                         break
+                    except design_similarity.JSONParseError as e:
+                        tqdm.write(f"  [SKIP] JSONパースエラーのためスキップ: {e}", file=sys.stderr)
+                        record["similarity"] = "PARSE_ERROR"
+                        record["reason"]     = str(e)
+                        n_error += 1
+                        break
                     except Exception as e:
                         err = str(e)
                         if "429" in err or "RESOURCE_EXHAUSTED" in err:

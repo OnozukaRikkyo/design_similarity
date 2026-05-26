@@ -221,8 +221,12 @@ def _clean_json(text: str) -> str:
     return text
 
 
+class JSONParseError(RuntimeError):
+    """モデル出力のJSONパース失敗を示す例外。"""
+
+
 def _parse_json_result(raw: str, image1: str, image2: str) -> dict:
-    """raw テキストから JSON を抽出してパースする。失敗時は sys.exit。"""
+    """raw テキストから JSON を抽出してパースする。失敗時は JSONParseError を送出。"""
     try:
         start = raw.index("{")
         end = raw.rindex("}") + 1
@@ -236,8 +240,7 @@ def _parse_json_result(raw: str, image1: str, image2: str) -> dict:
         log_dir.mkdir(exist_ok=True)
         log_path = log_dir / f"parse_error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         log_path.write_text(f"raw output:\n{raw}\n\n{traceback.format_exc()}", encoding="utf-8")
-        print(f"[ERROR] JSONパースに失敗しました。詳細: {log_path}", flush=True)
-        sys.exit(1)
+        raise JSONParseError(f"JSONパースに失敗しました。詳細: {log_path}")
     result["raw"] = raw
     return result
 
