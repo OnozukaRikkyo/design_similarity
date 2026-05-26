@@ -45,7 +45,7 @@ all.jsonl
 | `scatter_s1_s3.png` | S1×S2 散布図（全 triad）。GT 閾値候補の格子線付き |
 | `parallel_coordinates.png` | 平行座標（S1/S2/S3 軸）。min(S1,S2) 上位 50 件を強調 |
 | `threshold_survival.png` | 閾値 vs 残存 triad 数の生存曲線（S1 / S2 / S1&S2） |
-| `threshold_grid.png` | S1×S2 閾値グリッド（**GT 候補根拠図**）。20〜50 件を太字 |
+| `threshold_grid.png` | S1×S2 閾値グリッド（GT 候補根拠図）。S1 ≥ T₁ かつ S2 ≥ T₂ を満たす件数 |
 | `threshold_grid.csv` | 同上 CSV |
 | `discord_scatter.png` | S1×S2 散布図。FP（オレンジ★）/ FN（緑★）を全 triad に重ね描き |
 | `fp_grid.png` | `threshold_grid.png` と同軸・同スタイルで FP triad のみの件数を表示 |
@@ -65,7 +65,7 @@ all.jsonl
 | S2 | `score_bound_compliance` | Schubert 三角不等式に基づく幾何的整合性。GT 条件の第 2 軸 |
 | S3 | `score_angular_tightness` | 角度的一致度（可視化参考値。GT 条件に含まない）|
 
-**GT 設計方針**: `S1 ≥ T₁ AND S2 ≥ T₂` の 2 条件 AND でグリッド探索し、目視確認可能な 20〜50 件を選択。
+**GT 設計方針**: `S1 ≥ T₁ AND S2 ≥ T₂` の 2 条件 AND でグリッド探索し、適切な件数の閾値を選択。
 
 | T₁ | T₂ | GT 候補 triad 数 |
 |---|---|:---:|

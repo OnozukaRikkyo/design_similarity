@@ -349,7 +349,7 @@ def plot_threshold_grid_all(s1: np.ndarray, s3: np.ndarray, out_dir: Path) -> No
         title=r'D18 — GT candidates: $S_1 \geq T_1$ and $S_2 \geq T_2$',
         cmap_name='Blues_r',
         vmax_cap=200,
-        bold_range=(20, 50),
+        bold_range=None,
     )
     out_csv = out_dir / 'threshold_grid.csv'
     ths = _GRID_THS
