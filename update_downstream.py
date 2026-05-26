@@ -4,13 +4,13 @@ design_similarity パイプライン 一括実行スクリプト
 
 【通常の更新（qwen_similarity_results/ が進んだとき）】
   cd /home/sonozuka/design_similarity
-  python update_downstream.py
+  python update_downstream.py          # グラフ解析を含む全ステップ
+
+【グラフ解析をスキップしたいとき（高速化）】
+  python update_downstream.py --no-graph
 
 【新しいクラスや年を追加したとき（ベクトルインデックスから再構築）】
   python update_downstream.py --with-vector --no-gpu
-
-【グラフ解析も含めて更新】
-  python update_downstream.py --with-graph
 
 【wcc グリッド図だけ更新（fp/fn グリッド・threshold グリッド）】
   python update_downstream.py --wcc
@@ -54,8 +54,9 @@ design_similarity パイプライン 一括実行スクリプト
   [論文テーブル集計（全件上書き）]  ← D と G の両方に依存
   F: export_pipeline_counts.py         → output/pipeline_counts.csv
 
-  [グラフ解析（--with-graph 時のみ）]  ← G に依存
+  [グラフ解析（デフォルト実行、--no-graph でスキップ）]  ← G に依存
   K: graph/graph_analysis.py           → graph/output/{CLASS}/triadic_scored.jsonl
+                                          graph/output/{CLASS}/summary.csv
   L: graph/extract_high_sim_triads.py  → graph/output/{CLASS}/high_sim_triads/
   N: graph/verify/discord_analysis.py  → graph/output/{CLASS}/verify/{fp,fn}.csv  ← K に依存
   M: graph/verify/wcc_scoring.py       → graph/output/{CLASS}/verify/wcc_*_grid.png ← K,N に依存
@@ -72,9 +73,9 @@ BASE = Path(__file__).resolve().parent
 
 # デフォルト実行順（依存関係に基づく。アルファベット順ではない）
 STEPS_VECTOR  = ["V1", "V2", "V3", "V4"]
-STEPS_DEFAULT = ["A", "B", "C", "D", "E", "G", "H", "I", "J", "F"]
 STEPS_GRAPH   = ["K", "L", "N", "M"]
-ALL_STEPS     = STEPS_VECTOR + STEPS_DEFAULT + STEPS_GRAPH
+STEPS_DEFAULT = ["A", "B", "C", "D", "E", "G", "H", "I", "J", "F"] + STEPS_GRAPH
+ALL_STEPS     = STEPS_VECTOR + STEPS_DEFAULT
 
 STEP_LABELS = {
     "V1": "filter_pairs_by_class    → class/{CLASS}/cited_image_pairs/",
@@ -129,8 +130,12 @@ def main() -> None:
         help="ベクトルインデックス再構築（V1〜V4）を先頭に追加。新クラス・新年追加時のみ必要",
     )
     parser.add_argument(
+        "--no-graph", action="store_true",
+        help="グラフ解析（K〜M）をスキップ",
+    )
+    parser.add_argument(
         "--with-graph", action="store_true",
-        help="グラフ解析（K〜M）を末尾に追加",
+        help="（廃止・互換用）デフォルトでグラフ解析は常に実行されるため不要",
     )
     parser.add_argument(
         "--wcc", action="store_true",
@@ -157,10 +162,10 @@ def main() -> None:
         run([sys.executable, "graph/verify/update_wcc_grids.py", "--class", cls])
         return
     else:
+        steps_no_graph = [s for s in STEPS_DEFAULT if s not in STEPS_GRAPH]
         base_steps = (
             (STEPS_VECTOR if args.with_vector else [])
-            + STEPS_DEFAULT
-            + (STEPS_GRAPH if args.with_graph else [])
+            + (steps_no_graph if args.no_graph else STEPS_DEFAULT)
         )
 
     if args.from_step:

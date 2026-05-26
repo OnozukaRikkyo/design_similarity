@@ -2,7 +2,7 @@
 
 `judge_cited_pairs.py` の処理が進んで
 `/mnt/eightthdd/uspto/qwen_similarity_results/{year}.jsonl` が更新されたとき、
-下流データ（`all.jsonl` と分析図）を更新するための手順。
+下流データ（集計・図・グラフ解析）を更新するための手順。
 
 ---
 
@@ -10,8 +10,8 @@
 
 ```bash
 cd /home/sonozuka/design_similarity
-python update_downstream.py              # 通常の更新
-python update_downstream.py --with-graph # グラフ解析も含む
+python update_downstream.py              # 全ステップ（グラフ解析含む）
+python update_downstream.py --no-graph  # グラフ解析をスキップ（高速化）
 python update_downstream.py --from-step G  # G 以降だけ再実行
 ```
 
@@ -33,10 +33,13 @@ python update_downstream.py --from-step G  # G 以降だけ再実行
 | 8 | I | `vector/analysis/export_yes_reasons.py` | `vector/output/D18/yes_sim080_reasons.csv` | 常に全件上書き |
 | 9 | J | `vector/analysis/export_non_exact_pairs.py` | `rank_analysis/.../non_exact_pairs/` | 常に全件上書き |
 | 10 | **F** | `export_pipeline_counts.py` | `output/pipeline_counts.csv` | 常に全件上書き |
+| 11 | K | `graph/graph_analysis.py` | `graph/output/D18/summary.csv` など | 常に全件上書き |
+| 12 | L | `graph/extract_high_sim_triads.py` | `graph/output/D18/high_sim_triads/` | 常に全件上書き |
+| 13 | N | `graph/verify/discord_analysis.py` | `graph/output/D18/verify/{fp,fn}.csv` | 常に全件上書き |
+| 14 | M | `graph/verify/wcc_scoring.py` | `graph/output/D18/verify/wcc_*_grid.png` | 常に全件上書き |
 
-> **Step F は Step D と Step G の両方に依存する。** `pipeline_counts.csv` には `diagonal_summary.csv`（Step D）と `all.jsonl`（Step G）の両方のデータが含まれるため、必ず最後に実行する。
-
-> Step 1〜4（ペア抽出・ベクトル生成・インデックス・ランク検索）は `qwen_similarity_results/` と無関係なので不要。
+> **Step F は Step D と Step G の両方に依存する。** 必ず最後に実行する。
+> **Step N は Step K に依存する。Step M は Step K と N の両方に依存する。**
 
 ---
 
@@ -52,7 +55,7 @@ done
 
 0 件の年は `judgment=Unknown` になるが処理は正常に完了する。
 
-### 処理状況（2026-05-25 更新）
+### 処理状況（2026-05-26 更新）
 
 ```
 2007.jsonl: 5859/5859   ✓
@@ -69,40 +72,66 @@ done
 2018.jsonl: 52619/52619 ✓
 2019.jsonl: 59044/59044 ✓
 2020.jsonl: 55765/55765 ✓
-2021.jsonl: 4258/46614  処理中（D18分: 1/35 判定済み）
-2022.jsonl: 0/17127     未処理（D18分: 0/66）
+2021.jsonl: 46614/46614 ✓
+2022.jsonl: 1689/17127  処理中
 ```
 
-### all.jsonl の判定内訳（2026-05-25 更新、D18 / cosine_numpy）
+### all.jsonl の判定内訳（2026-05-26 更新、D18 / cosine_numpy）
 
 | judgment | 件数 |
 |----------|-----:|
-| Yes      |  222 |
-| No       | 1,208|
-| Unknown  |  100 |
+| Yes      |  226 |
+| No       | 1,238|
+| Unknown  |   66 |
 | **合計** | **1,530** |
 
-> 2021 の D18 ペア 35 件は 1 件のみ判定済み。2022 の D18 ペア 66 件は未処理。
+> 2022 処理中のため Unknown 66 件が残る。完了後に `python update_downstream.py` を再実行。
 
 ---
 
-## 出力先
+## 出力先（全ファイル一覧）
 
+### 集計・ヒートマップ（Step D, E）
+| ファイル | 内容 |
+|----------|------|
+| `output/diagonal_summary.csv` | クラス別引用ペア数・類似ペア数 |
+| `output/heatmap_reference.png` | クラス間引用頻度ヒートマップ（全ペア） |
+| `output/heatmap_similar.png` | クラス間引用頻度ヒートマップ（LLM 類似ペア） |
+| `output/pipeline_counts.csv` | 論文テーブル用パイプライン集計 CSV |
+
+### ベクトル検索 × 判定結合（Step G〜J）
 | ファイル | 内容 |
 |----------|------|
 | `/mnt/eightthdd/uspto/class/D18/rank_judgments/cosine_numpy/all.jsonl` | 全ペアの判定結合結果 |
+| `vector/output/D18/cosine_numpy/sim_histogram_perspective.png` | コサイン類似度分布 |
 | `vector/output/D18/cosine_numpy/rank_ccdf_perspective.png` | CCDF 図 |
 | `vector/output/D18/cosine_numpy/rank_scatter_perspective.png` | 散布図 |
+| `vector/output/D18/cosine_numpy/rank_density_perspective*.png` | 2D 密度マップ |
+| `vector/output/D18/cosine_numpy/high_sim_perspective_0950*.csv` | 高類似度ペア CSV |
 | `vector/output/D18/cosine_numpy/yes_sim080_reasons.csv` | Yes ペア CSV |
 | `/mnt/eightthdd/uspto/class/D18/rank_analysis/cosine_numpy/perspective/non_exact_pairs/` | 非完全一致画像 |
-| `output/diagonal_summary.csv` | クラス別引用ペア数・類似ペア数 |
-| `output/pipeline_counts.csv` | 論文テーブル用パイプライン集計 CSV |
-| `output/heatmap_reference.png` | クラス間引用頻度ヒートマップ（全ペア） |
-| `output/heatmap_similar.png` | クラス間引用頻度ヒートマップ（LLM 類似ペア） |
+
+### グラフ解析（Step K〜M）
+| ファイル | 内容 |
+|----------|------|
+| `graph/output/D18/summary.csv` | D18 グラフ基本統計（ノード数・ペア数・三角形数など） |
+| `graph/output/D18/triadic_scored.jsonl` | 全三角形スコア（confidence 降順） |
+| `graph/output/D18/score_distribution.png` | スコア分布図 |
+| `graph/output/D18/top_triangles_network.png` | 上位三角形ネットワーク図 |
+| `graph/output/D18/high_sim_triads/` | 高信頼三角形の画像（triad_001.png 〜） |
+| `graph/output/D18/verify/fp.csv` / `fn.csv` | FP/FN 判定リスト |
+| `graph/output/D18/verify/wcc_threshold_grid.png` | WCC 閾値グリッド図 |
+| `graph/output/D18/verify/wcc_fp_grid.png` | FP WCC グリッド図 |
+| `graph/output/D18/verify/wcc_fn_grid.png` | FN WCC グリッド図 |
+| `graph/output/D18/verify/wcc_distribution.png` | WCC 分布図 |
+| `graph/output/D18/verify/wcc_scored.jsonl` | WCC スコア付き全三角形 |
 
 ---
 
 ## 詳細ドキュメント
 
-- パイプライン全体: [vector/doc/pipeline.md](vector/doc/pipeline.md)
-- Step 5 の仕様: [vector/doc/join_judgments.md](vector/doc/join_judgments.md)
+- パイプライン全体: [doc/architecture.md](doc/architecture.md)
+- ステップ詳細: [UPDATE.md](UPDATE.md)
+- ベクトル検索: [vector/doc/pipeline.md](vector/doc/pipeline.md)
+- グラフ解析: [graph/triadic_scoring.md](graph/triadic_scoring.md)
+- Step G の仕様: [vector/doc/join_judgments.md](vector/doc/join_judgments.md)

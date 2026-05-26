@@ -10,13 +10,8 @@
 
 ```bash
 cd /home/sonozuka/design_similarity
-python update_downstream.py
-```
-
-### グラフ解析も含めて更新するとき
-
-```bash
-python update_downstream.py --with-graph
+python update_downstream.py          # グラフ解析を含む全ステップ
+python update_downstream.py --no-graph  # グラフ解析をスキップ（高速化）
 ```
 
 ### wcc グリッド図だけ更新したいとき
