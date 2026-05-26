@@ -298,7 +298,7 @@ def plot_wcc_threshold_grid(
     s1_arr: np.ndarray,
     wcc_arr: np.ndarray,
     out_path: Path,
-    bold_range: tuple[int, int] | None = (20, 50),
+    bold_range: tuple[int, int] | None = None,
 ) -> np.ndarray:
     """横軸 T_2 × 縦軸 T_1 の閾値グリッドを描画する。
 
@@ -328,11 +328,11 @@ def plot_wcc_threshold_grid(
 
     ax.set_xticks(range(n_wcc))
     ax.set_xticklabels([f'{t:.3f}' for t in ths_wcc],
-                       fontsize=12, rotation=45, ha='right')
+                       fontsize=16, rotation=45, ha='right')
     ax.set_yticks(range(n_s1))
-    ax.set_yticklabels([f'{t:.3f}' for t in ths_s1], fontsize=12)
-    ax.set_xlabel(r'$T_2$ (Watts-Strogatz clustering threshold)', fontsize=14)
-    ax.set_ylabel(r'$T_1$ (weakest-link threshold)', fontsize=14)
+    ax.set_yticklabels([f'{t:.3f}' for t in ths_s1], fontsize=16)
+    ax.set_xlabel(r'$T_2$ (Watts-Strogatz clustering threshold)', fontsize=24)
+    ax.set_ylabel(r'$T_1$ (weakest-link threshold)', fontsize=24)
 
     for i in range(n_s1):
         for j in range(n_wcc):
@@ -345,15 +345,15 @@ def plot_wcc_threshold_grid(
                   if bold_range and bold_range[0] <= val <= bold_range[1]
                   else 'normal')
             ax.text(j, i, str(val), ha='center', va='center',
-                    fontsize=11, color=txt_color, fontweight=fw)
+                    fontsize=13, color=txt_color, fontweight=fw)
 
-    ax.tick_params(labelsize=12, width=0.6, length=3)
+    ax.tick_params(labelsize=16, width=0.6, length=3)
     for sp in ax.spines.values():
         sp.set_linewidth(0.6)
 
     cbar = fig.colorbar(im, ax=ax, shrink=0.85)
-    cbar.set_label('Count', fontsize=13)
-    cbar.ax.tick_params(labelsize=11)
+    cbar.set_label('Count', fontsize=24)
+    cbar.ax.tick_params(labelsize=16)
 
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
