@@ -15,7 +15,6 @@ SIMILAR_DIRS = [
     Path("/mnt/eightthdd/uspto/yes_pair/qwen/high_similar"),
     Path("/mnt/eightthdd/uspto/yes_pair/qwen/similar"),
 ]
-TOP_N = 14
 OUT_DIR = Path("output")
 
 
@@ -51,11 +50,11 @@ def load_class_pairs(roots: list[Path]) -> tuple[defaultdict, defaultdict]:
 
 
 def build_df(pair_cnt: defaultdict, cls_cnt: defaultdict, label: str) -> pd.DataFrame:
-    top_cls = [c for c, _ in sorted(cls_cnt.items(), key=lambda x: -x[1])][:TOP_N]
+    all_cls = sorted(cls_cnt.keys())
     rows = []
-    for cls in top_cls:
+    for cls in all_cls:
         diagonal = pair_cnt[(cls, cls)]
-        cross = sum(pair_cnt[(cls, c)] for c in top_cls if c != cls)
+        cross = sum(pair_cnt[(cls, c)] for c in all_cls if c != cls)
         rows.append({"class": cls, f"{label}_diagonal": diagonal, f"{label}_cross_class": cross})
     return pd.DataFrame(rows)
 
