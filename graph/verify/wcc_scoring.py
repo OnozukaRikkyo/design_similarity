@@ -447,12 +447,12 @@ def plot_s3_degree_grid(
     X 軸刻みはデータの実際の S3 分布から自動決定する（最大 15 ステップ）。
     """
     pairs = [
-        (scored_map[key]['score_weakest_link'], r['score_s3'])
+        (scored_map[key]['score_weakest_link'], r['score_ext_degree'])
         for r in results
         if (key := (r['A'], r['B'], r['C'])) in scored_map
     ]
     if not pairs:
-        print('  [skip] no triads with both scored_map and score_s3')
+        print('  [skip] no triads with both scored_map and score_ext_degree')
         return
 
     s1_arr = np.array([p[0] for p in pairs])
@@ -530,15 +530,15 @@ def main() -> list[dict]:
         # S2_adj: triad 内部エッジを除外した調整済み局所クラスタリング係数
         c_adjs = triad_adjusted_clustering_coeff(G_unweighted, a, b, c)
         wcc_adj = min(c_adjs) if all(x is not None for x in c_adjs) else None
-        # S3: triad 内部の 2 辺を除いた外部次数の最小値
-        score_s3 = min(degrees[a] - 2, degrees[b] - 2, degrees[c] - 2)
+        # score_ext_degree: triad 内部の 2 辺を除いた外部次数の最小値
+        score_ext_degree = min(degrees[a] - 2, degrees[b] - 2, degrees[c] - 2)
         results.append({
             'A': a, 'B': b, 'C': c,
             's_AB': s_ab, 's_BC': s_bc, 's_AC': s_ac,
             'score_wcc': wcc,
             'score_wcc_adj': wcc_adj,
             'cc_adj_A': c_adjs[0], 'cc_adj_B': c_adjs[1], 'cc_adj_C': c_adjs[2],
-            'score_s3': score_s3,
+            'score_ext_degree': score_ext_degree,
         })
 
     results.sort(key=lambda r: -r['score_wcc'])
@@ -597,10 +597,10 @@ def main() -> list[dict]:
             f.write(json.dumps(row) + '\n')
     print(f'All {len(results)} triangles → {out_path}')
 
-    s3_vals_all = [r['score_s3'] for r in results]
-    print(f'  S3 (external degree)  min={min(s3_vals_all)}  '
-          f'median={statistics.median(s3_vals_all):.1f}  '
-          f'max={max(s3_vals_all)}')
+    ext_deg_vals = [r['score_ext_degree'] for r in results]
+    print(f'  score_ext_degree  min={min(ext_deg_vals)}  '
+          f'median={statistics.median(ext_deg_vals):.1f}  '
+          f'max={max(ext_deg_vals)}')
 
     # ------------------------------------------------------------------
     # 可視化

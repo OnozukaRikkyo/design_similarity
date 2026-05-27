@@ -63,6 +63,9 @@ $$S_2 = \max\!\left(0,\ 1 - \frac{\max(\theta_{AB},\, \theta_{BC},\, \theta_{AC}
 
 ## Score 3 — Schubert bound compliance（Schubert 2021）
 
+> **注意**: `wcc_scoring.py` が出力する `score_ext_degree`（外部次数の最小値）とは別のスコアです。
+> `triadic_scoring.md` の S3 はフィールド名 `score_bound_compliance`（`triadic_scored.jsonl`）です。
+
 $s_{AB}$ と $s_{BC}$ から cosine 類似度の三角不等式で $s_{AC}$ の理論的下界・上界を計算する。
 
 $$\mathrm{lb} = s_{AB} s_{BC} - \sqrt{(1-s_{AB}^2)(1-s_{BC}^2)}$$

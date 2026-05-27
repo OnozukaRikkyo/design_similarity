@@ -345,6 +345,27 @@ python graph/verify/visualize_threshold.py --t1 0.975 --t2 0.90 --no-consec
 
 ---
 
+## `wcc_scoring.py` の出力ファイル一覧
+
+`graph/output/D18/verify/` に出力される。
+
+| ファイル | 内容 |
+|---|---|
+| `wcc_scored.jsonl` | 全 triad のスコア（JSONL、フィールド一覧は下記） |
+| `wcc_distribution.png` | S2(WCC) の分布ヒストグラム |
+| `wcc_vs_scores.png` | S2 vs S1・S3(at)・S4 散布図（`triadic_scored.jsonl` 結合時のみ） |
+| `wcc_threshold_grid.png` | S1 × S2 閾値グリッド（全 triad） |
+| `wcc_threshold_grid_no_consec.png` | 同上、連番D-ID triad 除去済み |
+| `wcc_adj_threshold_grid.png` | S1 × S2_adj (Triad-adjusted WCC) 閾値グリッド（全 triad） |
+| `wcc_adj_threshold_grid_no_consec.png` | 同上、連番D-ID triad 除去済み |
+| `s3_degree_threshold_grid.png` | S1 × score_ext_degree 閾値グリッド（外部次数 = min(deg-2)） |
+| `fp_wcc_grid.png`, `fn_wcc_grid.png` | FP / FN triad の S1 × S2 グリッド |
+| `fp_wcc_grid_no_consec.png`, `fn_wcc_grid_no_consec.png` | 同上、連番D-ID除去済み |
+
+`graph/output/D18/triads/wcc_no_consec.jsonl` — 連番D-ID triad を除去した filtered 版（triad_plotter 向け）。
+
+---
+
 ## wcc_threshold_grid.png
 
 `graph/output/D18/verify/wcc_threshold_grid.png`
@@ -373,5 +394,23 @@ python graph/verify/visualize_threshold.py --t1 0.975 --t2 0.90 --no-consec
 
 | ファイル | 内容 |
 |---|---|
-| `graph/output/D18/verify/wcc_scored.jsonl` | 全 triad の S1(wl), S2(bc), S3(at), S4(snn), confidence |
+| `graph/output/D18/verify/wcc_scored.jsonl` | 全 triad のスコア（下記フィールド一覧参照） |
 | `/mnt/eightthdd/uspto/class/D18/rank_judgments/cosine_numpy/all.jsonl` | 辺ごとの source, target, rank, similarity, judgment, reason |
+
+### `wcc_scored.jsonl` フィールド一覧
+
+`wcc_scoring.py` が出力する全フィールド。`triadic_scored.jsonl` が存在する場合は結合済みフィールドも付与される。
+
+| フィールド | 由来 | 内容 |
+|---|---|---|
+| `rank` | wcc_scoring | score_wcc 降順の順位 |
+| `A`, `B`, `C` | wcc_scoring | 特許 ID |
+| `s_AB`, `s_BC`, `s_AC` | wcc_scoring | 各辺の cosine 類似度 |
+| `score_wcc` | wcc_scoring | Watts-Strogatz 局所クラスタリング係数の最小値 S2 = min(C_A, C_B, C_C) |
+| `score_wcc_adj` | wcc_scoring | Triad-adjusted WCC。triad 内部エッジを除外して計算。計算不能のとき null |
+| `cc_adj_A`, `cc_adj_B`, `cc_adj_C` | wcc_scoring | 各ノードの triad-adjusted クラスタリング係数（null = 外部次数 < 2） |
+| `score_ext_degree` | wcc_scoring | 外部次数の最小値 = min(deg(A)-2, deg(B)-2, deg(C)-2) |
+| `score_weakest_link` | triadic_scored | S1 = min(s_AB, s_BC, s_AC)（結合フィールド） |
+| `score_angular_tightness` | triadic_scored | 角度的一致度（結合フィールド） |
+| `score_snn` | triadic_scored | 3-way Shared Nearest Neighbor 類似度（結合フィールド） |
+| `confidence` | triadic_scored | S1〜S4 加重平均の統合確信度（結合フィールド） |
