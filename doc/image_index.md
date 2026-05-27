@@ -43,6 +43,27 @@
 
 使用画像は常に `file_names[0]`（D00000、主要図）。
 
+> **1 特許 = 1 タイプ = 1 画像**：各特許はこのルールで必ず 1 タイプのみに分類され、
+> `source_images` / `target_images` の dict には常に 1 エントリのみ格納される。
+> D00001 以降の図は使用しない。
+
+### 全体のタイプ別件数（image_index.py 出力例）
+
+```
+front=45,913  overview=13,730  perspective=374,849  合計 434,492 件
+```
+
+### D18 タイプ別内訳
+
+| タイプ | cited_image_pairs ペア数 | rank_index ユニーク特許数 |
+|--------|------------------------:|------------------------:|
+| perspective | 1,447 (94.6%) | 959 |
+| overview | 74 (4.8%) | 59 |
+| front | 9 (0.6%) | 12 |
+
+`judge_cited_pairs.py` は 3 タイプすべてを処理するが、
+retrieval 実験（`compute_ranks.py`）は perspective インデックスのみ使用する。
+
 ---
 
 ## インデックス構造
