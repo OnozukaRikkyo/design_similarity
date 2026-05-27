@@ -5,8 +5,12 @@ analysis/citation_recency.py
 USPTO Design Patent Co-citation Network — Recency Effect Analysis
 Outputs separate PNG files with explicit titles.
 
-Fig. 1  fig_vintage_effect.png  — Cumulative co-citations by filing year
-Fig. 2  fig_recency_rate.png    — Annual co-citation rate by filing year
+Fig. 1  fig_vintage_effect.png  — Cumulative co-citations by publication year
+Fig. 2  fig_recency_rate.png    — Annual co-citation rate by publication year
+
+Edge source: qwen_all_pairs/*.jsonl (same dataset as the paper's 55,794 pairs).
+parse_class filter (D01–D34) is applied to keep only classifiable pairs.
+X-axis represents patent publication year (date column in data/*.csv = issue date).
 
 Usage:
     python analysis/citation_recency.py
@@ -14,6 +18,9 @@ Usage:
 """
 
 import argparse
+import json
+import re
+from collections import defaultdict
 from pathlib import Path
 
 import matplotlib
@@ -25,7 +32,7 @@ import pandas as pd
 # ─────────────────────────────────────────────────────────────────────
 # Defaults
 # ─────────────────────────────────────────────────────────────────────
-EDGE_DIR = Path("/mnt/eightthdd/uspto/edge_list")
+EDGE_DIR = Path("/mnt/eightthdd/uspto/all_pair/qwen_all_pairs")
 DATA_DIR = Path("/mnt/eightthdd/uspto/data")
 OUT_DIR  = Path("analysis/output")
 
@@ -76,8 +83,17 @@ BOX_PROPS = dict(
 # ─────────────────────────────────────────────────────────────────────
 # Data loading
 # ─────────────────────────────────────────────────────────────────────
+def _parse_class(raw: str) -> str:
+    """Normalise a USPTO design class code to D01–D34 / D99, or return 'D??'."""
+    m = re.match(r"D\s*0*(\d+)", str(raw).strip(), re.I)
+    if not m:
+        return "D??"
+    n = int(m.group(1))
+    return f"D{n:02d}" if (1 <= n <= 34) or n == 99 else "D??"
+
+
 def load_patent_dates(data_dir: Path) -> dict[str, int]:
-    """Returns {patent_id: filing_year} from data/*.csv (date column = YYYYMMDD)."""
+    """Returns {patent_id: pub_year} from data/*.csv (date column = YYYYMMDD issue date)."""
     dfs = []
     for p in sorted(data_dir.glob("*.csv")):
         try:
@@ -88,46 +104,48 @@ def load_patent_dates(data_dir: Path) -> dict[str, int]:
     if not dfs:
         return {}
     combined = pd.concat(dfs, ignore_index=True).dropna(subset=["id", "date"])
-    combined["filing_year"] = (
+    combined["pub_year"] = (
         combined["date"].str.strip().str[:4]
         .where(combined["date"].str.strip().str[:4].str.isdigit())
         .astype("Int64")
     )
-    combined = combined.dropna(subset=["filing_year"])
-    return dict(zip(combined["id"].str.strip(), combined["filing_year"].astype(int)))
+    combined = combined.dropna(subset=["pub_year"])
+    return dict(zip(combined["id"].str.strip(), combined["pub_year"].astype(int)))
 
 
 def load_citation_counts(edge_dir: Path) -> dict[str, int]:
     """
-    Returns {patent_id: undirected degree} in co-citation network.
-    Duplicate OA events for the same pair are collapsed to one edge.
+    Returns {patent_id: undirected degree} in the filtered citation network.
+
+    Reads qwen_all_pairs/*.jsonl and applies the parse_class filter (D01–D34)
+    — the same filter used to derive the paper's 55,794 citation pairs.
+    Each unique (source, target) pair in the JSONL counts as one edge.
     """
-    dfs = []
-    for p in sorted(edge_dir.glob("*.csv")):
-        try:
-            dfs.append(pd.read_csv(p, usecols=["source", "target"], dtype=str,
-                                   on_bad_lines="skip"))
-        except Exception as e:
-            print(f"  [warn] {p.name}: {e}")
-    if not dfs:
-        return {}
+    neighbors: dict[str, set] = defaultdict(set)
+    n_total = n_filtered = 0
 
-    edges = pd.concat(dfs, ignore_index=True).dropna()
-    edges["source"] = edges["source"].str.strip()
-    edges["target"] = edges["target"].str.strip()
+    for path in sorted(edge_dir.glob("*.jsonl")):
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                n_total += 1
+                sc = _parse_class(rec.get("source_class", ""))
+                tc = _parse_class(rec.get("target_class", ""))
+                if sc == "D??" or tc == "D??":
+                    continue
+                n_filtered += 1
+                src, tgt = rec["source"], rec["target"]
+                neighbors[src].add(tgt)
+                neighbors[tgt].add(src)
 
-    # Canonicalise direction so deduplication is order-independent
-    swap = edges["source"] > edges["target"]
-    orig_src = edges.loc[swap, "source"].values.copy()
-    orig_tgt = edges.loc[swap, "target"].values.copy()
-    edges.loc[swap, "source"] = orig_tgt
-    edges.loc[swap, "target"] = orig_src
-
-    edges = edges.drop_duplicates(subset=["source", "target"])
-
-    src_deg = edges.groupby("source").size()
-    tgt_deg = edges.groupby("target").size()
-    return src_deg.add(tgt_deg, fill_value=0).astype(int).to_dict()
+    print(f"  {n_total:,} pairs read, {n_filtered:,} kept after parse_class filter")
+    return {pid: len(nb) for pid, nb in neighbors.items()}
 
 
 def build_df(patent_year: dict, citation_count: dict) -> pd.DataFrame:
@@ -140,9 +158,9 @@ def build_df(patent_year: dict, citation_count: dict) -> pd.DataFrame:
         obs_start = max(year, OBS_START_YEAR)
         age = max(1, OBS_END_YEAR - obs_start + 1)
         rows.append({
-            "filing_year":  year,
-            "count":        cnt,
-            "annual_rate":  cnt / age,
+            "pub_year":    year,
+            "count":       cnt,
+            "annual_rate": cnt / age,
         })
     return pd.DataFrame(rows)
 
@@ -151,7 +169,7 @@ def build_df(patent_year: dict, citation_count: dict) -> pd.DataFrame:
 # Plotting helpers
 # ─────────────────────────────────────────────────────────────────────
 def _valid_years(df: pd.DataFrame, min_n: int = MIN_N_PER_YEAR) -> list[int]:
-    counts = df.groupby("filing_year").size()
+    counts = df.groupby("pub_year").size()
     return sorted(counts[counts >= min_n].index.tolist())
 
 
@@ -165,7 +183,7 @@ def _style_ax_log(ax: plt.Axes, years: list[int], ylabel: str,
     ax.set_xticks(xs)
     ax.set_xticklabels([str(y) for y in years], rotation=45, ha="right")
 
-    ax.set_xlabel("Filing Year", labelpad=8)
+    ax.set_xlabel("Publication Year", labelpad=8)
     ax.set_ylabel(ylabel, labelpad=8)
     ax.set_title(title, pad=12, fontweight="bold")
     ax.set_xlim(-0.7, len(years) - 0.3)
@@ -187,25 +205,24 @@ def make_individual_figs(df: pd.DataFrame, out_dir: Path, min_n: int) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     years     = _valid_years(df, min_n)
-    cnt_data  = [df.loc[df["filing_year"] == y, "count"].values for y in years]
-    rate_data = [df.loc[df["filing_year"] == y, "annual_rate"].values for y in years]
-    n_total   = df.loc[df["filing_year"].isin(years)].shape[0]
+    cnt_data  = [df.loc[df["pub_year"] == y, "count"].values for y in years]
+    rate_data = [df.loc[df["pub_year"] == y, "annual_rate"].values for y in years]
+    n_total   = df.loc[df["pub_year"].isin(years)].shape[0]
 
     # ── Fig. 1: Vintage Effect ──────────────────────────────────────
     fig1, ax1 = plt.subplots(figsize=(8, 6))
     bp1 = _draw_boxplot(ax1, cnt_data, COLOR_CUMUL)
     _style_ax_log(ax1, years,
                   ylabel="Citation Count",
-                  # Vintage Effect: Citation Count by Filing Year"
                   title="")
     ax1.set_yscale("linear")
     ax1.yaxis.set_major_formatter(ticker.ScalarFormatter())
-    ax1.set_ylim(0, 25)
+    ax1.set_ylim(0, 16)
 
     text_ys = []
     for i, vals in enumerate(cnt_data):
         whisker_top = bp1["whiskers"][2 * i + 1].get_ydata()[1]
-        text_ys.append(min(whisker_top, 25) + 0.3)
+        text_ys.append(min(whisker_top, 16) + 0.3)
 
     STAGGER = 1.5
     offsets = [0.0] * len(text_ys)
@@ -254,7 +271,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--data-dir", default=str(DATA_DIR))
     ap.add_argument("--out-dir",  default=str(OUT_DIR))
     ap.add_argument("--min-n",    type=int, default=MIN_N_PER_YEAR,
-                    help="Minimum patents per filing-year bin to include")
+                    help="Minimum patents per publication-year bin to include")
     ap.add_argument("--obs-end",  type=int, default=OBS_END_YEAR,
                     help="Observation window end year (default: 2022)")
     return ap.parse_args()
@@ -282,11 +299,11 @@ def main() -> None:
 
     print("Building analysis dataframe …")
     df = build_df(patent_year, citation_count)
-    year_min, year_max = df["filing_year"].min(), df["filing_year"].max()
+    year_min, year_max = df["pub_year"].min(), df["pub_year"].max()
     print(f"  {len(df):,} matched patents  |  year range {year_min}–{year_max}")
 
     valid = _valid_years(df, args.min_n)
-    print(f"  {len(valid)} filing-year bins with ≥ {args.min_n} patents "
+    print(f"  {len(valid)} publication-year bins with ≥ {args.min_n} patents "
           f"({valid[0]}–{valid[-1]})")
 
     print("\nGenerating figures …")

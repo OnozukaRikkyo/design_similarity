@@ -1,7 +1,7 @@
 # 引用recency効果の可視化 (`analysis/citation_recency.py`)
 
 USPTO 意匠特許共引用ネットワークにおける **ReceiverRecency 効果**を可視化するスクリプト。
-累積共引用数（ヴィンテージ効果）と年間共引用率（Recency 効果）を出願年別箱ひげ図で比較し、
+累積共引用数（ヴィンテージ効果）と年間共引用率（Recency 効果）を**公告年別**箱ひげ図で比較し、
 ERGM の ReceiverRecency 係数と対応付けて示す。
 
 ---
@@ -18,62 +18,58 @@ ERGM の ReceiverRecency 係数と対応付けて示す。
 
 | | パス | 形式 |
 |---|---|---|
-| 入力 | `/mnt/eightthdd/uspto/edge_list/*.csv` | CSV（共引用ペア） |
+| 入力 | `/mnt/eightthdd/uspto/all_pair/qwen_all_pairs/*.jsonl` | JSONL（論文の 55,794 ペアと同一集合） |
 | 入力 | `/mnt/eightthdd/uspto/data/*.csv` | CSV（特許属性: `id`, `date`） |
-| 出力 | `analysis/output/fig1_vintage_effect.png` | 300 DPI PNG |
-| 出力 | `analysis/output/fig2_receiver_recency.png` | 300 DPI PNG |
-| 出力 | `analysis/output/fig3_comparison.png` | 300 DPI PNG（学会発表用） |
+| 出力 | `analysis/output/fig_vintage_effect.png` | 300 DPI PNG |
+| 出力 | `analysis/output/fig_recency_rate.png` | 300 DPI PNG |
+
+> **変更履歴（2026-05-27）**: エッジソースを `edge_list/*.csv`（全引用・クラス不問）から
+> `qwen_all_pairs/*.jsonl` + `parse_class` フィルタ（D01〜D34）に変更。
+> 図の N 値が論文記載の 55,794 ペアと同一集合に対応するようになった。
+> X 軸ラベルも "Filing Year" → "Publication Year" に修正（`date` 列 = 公告日）。
 
 ---
 
 ## 出力図の詳細
 
-### fig_vintage_effect.png — 引用次数（出願年別）
+### fig_vintage_effect.png — 引用次数（公告年別）
 
 | 視覚要素 | 内容 |
 |---------|------|
-| タイトル | Vintage Effect: Citation Count by Filing Year |
-| X 軸 | 特許出願年（全年表示・45° 斜め）|
+| X 軸 | 特許公告年（Publication Year）|
 | Y 軸 | Citation Count（リニアスケール、範囲 0–25） |
 | 箱 | 四分位範囲（IQR）。外れ値は小点で表示 |
-| 赤線 | 各年の中央値 |
-| ひげ上注記 | 各年のデータ件数 n |
-| 注釈 | 直感に反し **2013–2017 年特許が最も引用数が多い**（ReceiverRecency が絶対値でも優位） |
+| 黒線 | 各年の中央値 |
+| ひげ上注記 | 各年のユニーク特許数 n（55,794 ペアに登場する特許の公告年別集計） |
 
-**実測中央値（2007–2017 年）:**
+**実測値（2026-05-27 時点, 55,794 ペア / 24,449 ユニーク特許）:**
 
-| 出願年 | パテント数 | 中央値 | IQR |
-|-------|-----------|-------|-----|
-| 2007 | 5,363 | 2.0 | [1.0, 3.0] |
-| 2010 | 6,099 | 2.0 | [1.0, 3.0] |
-| 2013 | 8,558 | 2.0 | [1.0, 5.0] |
-| 2015 | 11,257 | 3.0 | [1.0, 6.0] |
-| 2016 | 14,114 | 4.0 | [2.0, 9.0] |
-| 2017 | 12,140 | 4.0 | [2.0, 8.0] |
+| 公告年 | パテント数 n |
+|--------|------------:|
+| 2007 | 922 |
+| 2008 | 947 |
+| 2009 | 908 |
+| 2010 | 948 |
+| 2011 | 1,087 |
+| 2012 | 1,110 |
+| 2013 | 1,277 |
+| 2014 | 1,292 |
+| 2015 | 1,596 |
+| 2016 | 1,862 |
+| 2017 | 2,396 |
+| 2018 | 2,310 |
+| 2019 | 2,652 |
+| 2020 | 2,044 |
+| 2021 | 1,898 |
+| 2022 | 1,200 |
+| **合計** | **24,449** |
 
-### fig2_receiver_recency.png — 年間共引用率（出願年別）
+### fig_recency_rate.png — 年間共引用率（公告年別）
 
 | 視覚要素 | 内容 |
 |---------|------|
-| X 軸 | 特許出願年 |
+| X 軸 | 特許公告年（Publication Year） |
 | Y 軸 | 年間共引用率 = 累積共引用数 / 有効観測年数 |
-| 注釈ボックス | ERGM ReceiverRecency 係数（β₅ᵧᵣ・β₁₀ᵧᵣ）の範囲 |
-
-**実測中央値（年間率）:**
-
-| 出願年 | 中央値 (citations/year) | IQR |
-|-------|------------------------|-----|
-| 2007 | 0.125 | [0.062, 0.188] |
-| 2012 | 0.182 | [0.091, 0.364] |
-| 2015 | 0.375 | [0.125, 0.750] |
-| 2017 | 0.667 | [0.333, 1.333] |
-
-2007 年→2017 年で中央値が **約 5.3 倍**に増加。ERGM の正の ReceiverRecency 係数と整合する。
-
-### fig3_comparison.png — 2 パネル比較（学会発表推奨）
-
-左右に並べることで「累積数でも近年特許が優位」「年間率では差がさらに拡大」という
-ReceiverRecency 効果の構造が一目で伝わる。
 
 ---
 
@@ -82,44 +78,37 @@ ReceiverRecency 効果の構造が一目で伝わる。
 ```
 annual_rate = cumulative_count / effective_age
 
-effective_age = max(1, OBS_END_YEAR − max(filing_year, OBS_START_YEAR) + 1)
+effective_age = max(1, OBS_END_YEAR − max(pub_year, OBS_START_YEAR) + 1)
 ```
 
 | 定数 | 値 | 意味 |
 |------|---|------|
-| `OBS_END_YEAR` | 2022 | edge_list の最終年 |
-| `OBS_START_YEAR` | 2007 | edge_list の開始年 |
-
-出願年が観測窓開始（2007）より古い特許は有効観測期間を 16 年（最大）に頭打ちする。
+| `OBS_END_YEAR` | 2022 | 観測窓末尾年 |
+| `OBS_START_YEAR` | 2007 | 観測窓開始年 |
 
 ---
 
 ## 共引用数の定義
 
 共引用ネットワーク上の**無向次数**を使用する。  
-同一ペア（source, target）が複数の出願イベントで共引用されていても 1 エッジとしてカウントする。
+`qwen_all_pairs/*.jsonl` を `parse_class` フィルタ（D01〜D34）で絞り込んだ
+55,794 ペアのみを対象とし、同一ペアは 1 エッジとしてカウントする。
 
 ```
-count(patent P) = |{Q : (P, Q) は共引用ペアとして edge_list に存在}|
+count(patent P) = |{Q : (P, Q) は 55,794 ペア集合に存在}|
 ```
-
-`edge_list/*.csv` の全ファイルを結合し、`source < target` に正規化した後に重複削除してから次数を集計する。
 
 ---
 
-## データ規模（全年: 2007–2022 edge_list）
+## データ規模（全年: 2007–2022）
 
 | 量 | 値 |
 |----|---|
-| edge_list 総行数（重複含む） | 323,132 |
-| 重複除去後ユニークエッジ数 | — |
-| 共引用ネットワーク上のノード数 | 91,556 |
-| 出願年が判明したノード数 | 91,556（100%） |
-| 有効ビン（≥ 10 件）の年範囲 | 2007–2017 |
-
-**2018–2022 年特許がネットワークに出現しない理由:** 出願から付与まで平均 1〜2 年かかるため、
-2018 年以降に付与された意匠特許は 2022 年時点では先行技術として引用される期間が短く、
-共引用ネットワークへの組み込みがほぼゼロ。これ自体が ReceiverRecency の傍証となる。
+| qwen_all_pairs 総ペア数 | 462,641 |
+| parse_class フィルタ後（D01〜D34） | 55,794 |
+| 共引用ネットワーク上のユニーク特許数 | 24,449 |
+| 公告年が判明したノード数 | 24,449（100%） |
+| 有効ビン（≥ 10 件）の年範囲 | 2007–2022 |
 
 ---
 
@@ -131,10 +120,8 @@ Physical Review Letters (PRL) 準拠の物理学論文スタイル。
 |----------|----|
 | フォント | serif（DejaVu Serif） |
 | 目盛り方向 | 内向き（4 辺すべて） |
-| 補助目盛り | Y 軸に `AutoMinorLocator` |
 | 解像度 | 300 DPI |
 | 背景 | 白（`figure.facecolor = white`） |
-| グリッド | 有効（薄灰 `#DDDDDD`、α=0.7） |
 
 ---
 
@@ -146,7 +133,7 @@ python analysis/citation_recency.py
 
 # パス・ビン閾値を指定
 python analysis/citation_recency.py \
-    --edge-dir /mnt/eightthdd/uspto/edge_list \
+    --edge-dir /mnt/eightthdd/uspto/all_pair/qwen_all_pairs \
     --data-dir /mnt/eightthdd/uspto/data \
     --out-dir  analysis/output \
     --min-n    10
@@ -157,7 +144,7 @@ python analysis/citation_recency.py --obs-end 2020
 
 | オプション | デフォルト | 説明 |
 |-----------|-----------|------|
-| `--edge-dir` | `/mnt/eightthdd/uspto/edge_list` | 共引用ペア CSV のディレクトリ |
+| `--edge-dir` | `/mnt/eightthdd/uspto/all_pair/qwen_all_pairs` | 共引用ペア JSONL のディレクトリ |
 | `--data-dir` | `/mnt/eightthdd/uspto/data` | 特許属性 CSV のディレクトリ |
 | `--out-dir` | `analysis/output` | PNG 出力先 |
 | `--min-n` | `10` | ビンに含む最低特許件数 |
