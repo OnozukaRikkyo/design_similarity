@@ -78,6 +78,34 @@ def build_citation_graph(data: list[dict]) -> nx.Graph:
     return G
 
 
+def triad_adjusted_clustering_coeff(G: nx.Graph, a: str, b: str, c: str) -> list:
+    """Triad-adjusted local clustering coefficient for each node in triad (a, b, c).
+
+    Excludes the other two triad members from each node's neighborhood before
+    computing the local clustering coefficient (C'_v). This removes the artificial
+    inflation caused by the triad's own B–C, A–C, A–B edges being self-referential.
+
+    For node v:
+        N'(v) = N(v) \\ {A, B, C}
+        k' = |N'(v)|
+        C'_v = 2 * L'(v) / (k' * (k' - 1))    if k' >= 2
+        C'_v = None                              if k' < 2  (undefined)
+
+    Returns [C'_a, C'_b, C'_c]. Each element is None when k' < 2.
+    """
+    triad_set = {a, b, c}
+    c_adjs = []
+    for v in (a, b, c):
+        N_v_ext = set(G.neighbors(v)) - triad_set
+        k_ext = len(N_v_ext)
+        if k_ext < 2:
+            c_adjs.append(None)
+        else:
+            n_pairs = G.subgraph(N_v_ext).number_of_edges()
+            c_adjs.append(2.0 * n_pairs / (k_ext * (k_ext - 1)))
+    return c_adjs
+
+
 def build_similarity_graph(data: list[dict]) -> nx.Graph:
     G = nx.Graph()
     for d in data:
@@ -203,41 +231,162 @@ def plot_wcc_vs_scores(
 
 
 # ==============================================================================
-# Fig: S1 × S_WCC 閾値グリッド（threshold_grid.png と同構造）
+# Fig: S1 × S_WCC 閾値グリッド — 共有ヘルパー
 # ==============================================================================
+
+def _compute_threshold_grids(
+    s1_arr: np.ndarray,
+    wcc_arr: np.ndarray,
+    ths_s1: np.ndarray,
+    ths_wcc: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """閾値グリッドのカウントを計算する。
+
+    wcc_arr の np.nan は Undefined 扱いとして undef_col に集計し、
+    main_grid には含めない。
+
+    Returns:
+        undef_col:  shape (n_s1,)   — S1 ≥ T1 かつ wcc が nan な件数
+        main_grid:  shape (n_s1, n_wcc) — S1 ≥ T1 かつ wcc ≥ T2 な件数
+    """
+    n_s1  = len(ths_s1)
+    n_wcc = len(ths_wcc)
+    is_nan = np.isnan(wcc_arr)
+    undef_col = np.zeros(n_s1, dtype=int)
+    main_grid = np.zeros((n_s1, n_wcc), dtype=int)
+    for i, t1 in enumerate(ths_s1):
+        mask_s1 = s1_arr >= t1
+        undef_col[i] = int((mask_s1 & is_nan).sum())
+        for j, tw in enumerate(ths_wcc):
+            main_grid[i, j] = int((mask_s1 & ~is_nan & (wcc_arr >= tw)).sum())
+    return undef_col, main_grid
+
+
+def _render_two_panel_grid(
+    undef_col: np.ndarray,
+    main_grid: np.ndarray,
+    ths_s1: np.ndarray,
+    ths_wcc: np.ndarray,
+    out_path: Path,
+    xlabel: str,
+    bold_range: tuple[int, int] | None = None,
+) -> None:
+    """Undefined 列 + T2 グリッドの 2 パネルレイアウトを描画して保存する。
+
+    両パネルとも Blues カラーマップを使用し、カラーバーのスケールを共有する。
+    Undefined 列の幅は T2 グリッドの 1 列分と同じ幅に設定する。
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as mgridspec
+
+    n_s1  = len(ths_s1)
+    n_wcc = len(ths_wcc)
+    cmap_obj  = plt.get_cmap('Blues')
+    vmax_m    = max(1, min(300, int(main_grid[0, 0])))
+
+    fig = plt.figure(figsize=(12.0, 6.0), facecolor='white')
+    gs  = mgridspec.GridSpec(1, 2, figure=fig,
+                             width_ratios=[1, n_wcc], wspace=0.015)
+    ax_u = fig.add_subplot(gs[0, 0])
+    ax_m = fig.add_subplot(gs[0, 1])
+
+    # ---- Undefined 列 ----
+    ax_u.imshow(undef_col.reshape(n_s1, 1), origin='upper', aspect='auto',
+                cmap=cmap_obj, vmin=0, vmax=vmax_m)
+    for i, val in enumerate(undef_col):
+        norm_val = min(val / vmax_m, 1.0)
+        r, g, b, _ = cmap_obj(norm_val)
+        txt_color = 'white' if 0.299 * r + 0.587 * g + 0.114 * b < 0.5 else '#111111'
+        ax_u.text(0, i, str(val), ha='center', va='center',
+                  fontsize=13, color=txt_color)
+    ax_u.set_xticks([0])
+    ax_u.set_xticklabels(['Undefined'], fontsize=14, rotation=45, ha='right')
+    ax_u.set_yticks(range(n_s1))
+    ax_u.set_yticklabels([f'{t:.3f}' for t in ths_s1], fontsize=16)
+    ax_u.set_ylabel('T1 (Weakest-Link Threshold)', fontsize=24)
+    ax_u.tick_params(labelsize=16, width=0.6, length=3)
+    for sp in ax_u.spines.values():
+        sp.set_linewidth(0.6)
+    ax_u.spines['right'].set_linewidth(2.2)
+
+    # ---- T2 グリッド ----
+    im = ax_m.imshow(main_grid, origin='upper', aspect='auto',
+                     cmap=cmap_obj, vmin=0, vmax=vmax_m)
+    for i in range(n_s1):
+        for j in range(n_wcc):
+            val = main_grid[i, j]
+            norm_val = min(val / vmax_m, 1.0)
+            r, g, b, _ = cmap_obj(norm_val)
+            txt_color = 'white' if 0.299 * r + 0.587 * g + 0.114 * b < 0.5 else '#111111'
+            fw = 'bold' if bold_range and bold_range[0] <= val <= bold_range[1] else 'normal'
+            ax_m.text(j, i, str(val), ha='center', va='center',
+                      fontsize=13, color=txt_color, fontweight=fw)
+    ax_m.set_xticks(range(n_wcc))
+    ax_m.set_xticklabels([f'{t:.3f}' for t in ths_wcc],
+                          fontsize=16, rotation=45, ha='right')
+    ax_m.set_yticks(range(n_s1))
+    ax_m.set_yticklabels([])
+    ax_m.set_xlabel(xlabel, fontsize=24)
+    ax_m.tick_params(labelsize=16, width=0.6, length=3)
+    for sp in ax_m.spines.values():
+        sp.set_linewidth(0.6)
+
+    cbar = fig.colorbar(im, ax=ax_m, shrink=0.85)
+    cbar.set_label('Count', fontsize=24)
+    cbar.ax.tick_params(labelsize=16)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    print(f'Threshold grid → {out_path}')
+
 
 def plot_wcc_threshold_grid(
     s1_arr: np.ndarray,
     wcc_arr: np.ndarray,
     out_path: Path,
     bold_range: tuple[int, int] | None = None,
+    undef_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """横軸 T_2 × 縦軸 T_1 の閾値グリッドを描画する。
 
-    セルの値 = S1 ≥ T1 かつ S_WCC ≥ T_2 を満たす三角形の件数。
-    大きい値ほど濃い Blue。bold_range の件数を太字で強調（None = 強調なし）。
+    undef_mask が None のとき（FP/FN グリッドなど）は既存の 1 パネルレイアウトで描画する。
+    undef_mask が与えられたとき（主グリッド）は _render_two_panel_grid を使った
+    2 パネルレイアウト（Undefined 列 + T2 グリッド）で描画する。
     """
+    ths_s1  = _S1_GRID_THS
+    ths_wcc = _WCC_GRID_THS
+
+    if undef_mask is not None:
+        wcc_with_nan = wcc_arr.astype(float).copy()
+        wcc_with_nan[undef_mask] = np.nan
+        undef_col, main_grid = _compute_threshold_grids(s1_arr, wcc_with_nan, ths_s1, ths_wcc)
+        _render_two_panel_grid(
+            undef_col, main_grid, ths_s1, ths_wcc, out_path,
+            xlabel='T2 (Local Clustering Coefficient Threshold)',
+            bold_range=bold_range,
+        )
+        return main_grid
+
+    # ---- 後方互換: 1 パネル（FP/FN グリッド用）----
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    ths_s1  = _S1_GRID_THS    # Y軸 (行): 0.800 → 1.000, step 0.025
-    ths_wcc = _WCC_GRID_THS   # X軸 (列): 0.500 → 1.000, step 0.050
     n_s1  = len(ths_s1)
     n_wcc = len(ths_wcc)
-
     grid = np.zeros((n_s1, n_wcc), dtype=int)
     for i, t1 in enumerate(ths_s1):
         for j, tw in enumerate(ths_wcc):
             grid[i, j] = int(((s1_arr >= t1) & (wcc_arr >= tw)).sum())
 
     fig, ax = plt.subplots(figsize=(8.5, 6.0), facecolor='white')
-
-    cmap_obj = plt.get_cmap('Blues')   # 大きい値 = 濃い青（全図共通）
+    cmap_obj     = plt.get_cmap('Blues')
     vmax_display = max(1, min(300, int(grid[0, 0])))
     im = ax.imshow(grid, origin='upper', aspect='auto',
                    cmap=cmap_obj, vmin=0, vmax=vmax_display)
-
     ax.set_xticks(range(n_wcc))
     ax.set_xticklabels([f'{t:.3f}' for t in ths_wcc],
                        fontsize=16, rotation=45, ha='right')
@@ -245,34 +394,45 @@ def plot_wcc_threshold_grid(
     ax.set_yticklabels([f'{t:.3f}' for t in ths_s1], fontsize=16)
     ax.set_xlabel('T2 (Local Clustering Coefficient Threshold)', fontsize=24)
     ax.set_ylabel('T1 (Weakest-Link Threshold)', fontsize=24)
-
     for i in range(n_s1):
         for j in range(n_wcc):
             val = grid[i, j]
             norm_val = min(val / vmax_display, 1.0)
             r, g, b, _ = cmap_obj(norm_val)
-            luminance = 0.299 * r + 0.587 * g + 0.114 * b
-            txt_color = 'white' if luminance < 0.5 else '#111111'
-            fw = ('bold'
-                  if bold_range and bold_range[0] <= val <= bold_range[1]
-                  else 'normal')
+            txt_color = 'white' if 0.299 * r + 0.587 * g + 0.114 * b < 0.5 else '#111111'
+            fw = 'bold' if bold_range and bold_range[0] <= val <= bold_range[1] else 'normal'
             ax.text(j, i, str(val), ha='center', va='center',
                     fontsize=13, color=txt_color, fontweight=fw)
-
     ax.tick_params(labelsize=16, width=0.6, length=3)
     for sp in ax.spines.values():
         sp.set_linewidth(0.6)
-
     cbar = fig.colorbar(im, ax=ax, shrink=0.85)
     cbar.set_label('Count', fontsize=24)
     cbar.ax.tick_params(labelsize=16)
-
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='white')
     plt.close(fig)
     print(f'WCC threshold grid → {out_path}')
     return grid
+
+
+def plot_adj_wcc_threshold_grid(
+    s1_arr: np.ndarray,
+    wcc_adj_arr: np.ndarray,
+    out_path: Path,
+) -> None:
+    """S1 × S2_adj 閾値グリッド（Triad-adjusted WCC）。_render_two_panel_grid に委譲する。
+
+    wcc_adj_arr の np.nan は Undefined（k_ext < 2）として左端列に集計する。
+    """
+    undef_col, main_grid = _compute_threshold_grids(
+        s1_arr, wcc_adj_arr, _S1_GRID_THS, _WCC_GRID_THS,
+    )
+    _render_two_panel_grid(
+        undef_col, main_grid, _S1_GRID_THS, _WCC_GRID_THS, out_path,
+        xlabel='T2 (Triad-Adjusted Local Clustering Coefficient Threshold)',
+    )
 
 
 def plot_fp_fn_wcc_grids(results: list[dict], out_dir: Path, suffix: str = '') -> None:
@@ -286,7 +446,8 @@ def plot_fp_fn_wcc_grids(results: list[dict], out_dir: Path, suffix: str = '') -
     """
     import csv
 
-    wcc_map = {(r['A'], r['B'], r['C']): r['score_wcc'] for r in results}
+    wcc_map     = {(r['A'], r['B'], r['C']): r['score_wcc']     for r in results}
+    wcc_adj_map = {(r['A'], r['B'], r['C']): r.get('score_wcc_adj') for r in results}
 
     for case, csv_name, out_stem in [
         ('FP', 'fp.csv', 'wcc_fp_grid'),
@@ -297,10 +458,11 @@ def plot_fp_fn_wcc_grids(results: list[dict], out_dir: Path, suffix: str = '') -
             print(f'  [skip] {csv_path} not found')
             continue
 
-        # (A, B, C) で重複除去しつつ S1 と S_WCC を収集
+        # (A, B, C) で重複除去しつつ S1, S_WCC, S_WCC_adj を収集
         seen: set[tuple] = set()
-        s1_list:  list[float] = []
-        wcc_list: list[float] = []
+        s1_list:    list[float] = []
+        wcc_list:   list[float] = []
+        undef_list: list[bool]  = []
         with open(csv_path, newline='', encoding='utf-8') as f:
             for row in csv.DictReader(f):
                 key = (row['A'], row['B'], row['C'])
@@ -311,6 +473,7 @@ def plot_fp_fn_wcc_grids(results: list[dict], out_dir: Path, suffix: str = '') -
                     continue
                 s1_list.append(float(row['S1_weakest_link']))
                 wcc_list.append(wcc_map[key])
+                undef_list.append(wcc_adj_map.get(key) is None)
 
         if not s1_list:
             print(f'  [skip] no matching triads for {case}')
@@ -323,6 +486,7 @@ def plot_fp_fn_wcc_grids(results: list[dict], out_dir: Path, suffix: str = '') -
             np.array(wcc_list),
             out_dir / f'{out_stem}{suffix}.png',
             bold_range=None,
+            undef_mask=np.array(undef_list),
         )
 
 
@@ -377,28 +541,42 @@ def main() -> list[dict]:
         s_ab = G[a][b]['sim']
         s_bc = G[b][c]['sim']
         s_ac = G[a][c]['sim']
-        # S2 = min(C_A, C_B, C_C): 3頂点の局所クラスタリング係数の最小値
+        # S2 (standard): min(C_A, C_B, C_C) Watts-Strogatz
         wcc = min(clustering[a], clustering[b], clustering[c])
+        # S2_adj: triad 内部エッジを除外した調整済み局所クラスタリング係数
+        c_adjs = triad_adjusted_clustering_coeff(G_unweighted, a, b, c)
+        wcc_adj = min(c_adjs) if all(x is not None for x in c_adjs) else None
         results.append({
             'A': a, 'B': b, 'C': c,
             's_AB': s_ab, 's_BC': s_bc, 's_AC': s_ac,
             'score_wcc': wcc,
+            'score_wcc_adj': wcc_adj,
+            'cc_adj_A': c_adjs[0], 'cc_adj_B': c_adjs[1], 'cc_adj_C': c_adjs[2],
         })
 
     results.sort(key=lambda r: -r['score_wcc'])
 
     wcc_vals = [r['score_wcc'] for r in results]
-    print(f'  S_WCC  min={min(wcc_vals):.4f}  '
+    print(f'  S_WCC (standard)  min={min(wcc_vals):.4f}  '
           f'median={statistics.median(wcc_vals):.4f}  '
           f'max={max(wcc_vals):.4f}')
 
-    print(f'\n  Top 20 triangles by S_WCC:')
+    wcc_adj_defined = [r['score_wcc_adj'] for r in results if r['score_wcc_adj'] is not None]
+    wcc_adj_undef   = sum(1 for r in results if r['score_wcc_adj'] is None)
+    print(f'  S_WCC_adj         defined={len(wcc_adj_defined)}  undefined={wcc_adj_undef}')
+    if wcc_adj_defined:
+        print(f'  S_WCC_adj         min={min(wcc_adj_defined):.4f}  '
+              f'median={statistics.median(wcc_adj_defined):.4f}  '
+              f'max={max(wcc_adj_defined):.4f}')
+
+    print(f'\n  Top 20 triangles by S_WCC (standard):')
     print(f'  {"rank":>4}  {"A":10}  {"B":10}  {"C":10}  '
-          f'{"s_AB":6}  {"s_BC":6}  {"s_AC":6}  {"wcc":6}')
+          f'{"s_AB":6}  {"s_BC":6}  {"s_AC":6}  {"wcc":6}  {"wcc_adj":8}')
     for i, r in enumerate(results[:20], 1):
+        adj_str = f'{r["score_wcc_adj"]:.4f}' if r['score_wcc_adj'] is not None else 'Undef'
         print(f'  {i:4d}  {r["A"]:10}  {r["B"]:10}  {r["C"]:10}  '
               f'{r["s_AB"]:.4f}  {r["s_BC"]:.4f}  {r["s_AC"]:.4f}  '
-              f'{r["score_wcc"]:.4f}')
+              f'{r["score_wcc"]:.4f}  {adj_str:>8}')
 
     # ------------------------------------------------------------------
     # 既存スコアとの対応マップ (triadic_scored.jsonl)
@@ -449,16 +627,34 @@ def main() -> list[dict]:
 
     if scored_map:
         pairs = [
-            (scored_map[key]['score_weakest_link'], r['score_wcc'])
+            (scored_map[key]['score_weakest_link'], r['score_wcc'], r['score_wcc_adj'])
             for r in results
             if (key := (r['A'], r['B'], r['C'])) in scored_map
         ]
-        s1_arr  = np.array([p[0] for p in pairs])
-        wcc_arr = np.array([p[1] for p in pairs])
+        s1_arr   = np.array([p[0] for p in pairs])
+        wcc_arr  = np.array([p[1] for p in pairs])
+        undef_m  = np.array([p[2] is None for p in pairs])
         plot_wcc_threshold_grid(
             s1_arr, wcc_arr,
             OUTPUT_DIR / 'wcc_threshold_grid.png',
             bold_range=None,
+            undef_mask=undef_m,
+        )
+
+        # Adj WCC グリッド（全体）
+        pairs_adj = [
+            (scored_map[key]['score_weakest_link'], r['score_wcc_adj'])
+            for r in results
+            if (key := (r['A'], r['B'], r['C'])) in scored_map
+        ]
+        s1_adj_arr  = np.array([p[0] for p in pairs_adj])
+        wcc_adj_arr = np.array([
+            x if x is not None else np.nan
+            for x in (p[1] for p in pairs_adj)
+        ])
+        plot_adj_wcc_threshold_grid(
+            s1_adj_arr, wcc_adj_arr,
+            OUTPUT_DIR / 'wcc_adj_threshold_grid.png',
         )
 
         # 連番D-IDを含むtriadを除去したグリッド + JSONL保存
@@ -487,12 +683,25 @@ def main() -> list[dict]:
                 f.write(json.dumps(row) + '\n')
         print(f'  → {nc_jsonl}  ({len(results_nc)} triads)')
 
-        s1_nc  = np.array([scored_map[(r['A'], r['B'], r['C'])]['score_weakest_link'] for r in results_nc])
-        wcc_nc = np.array([r['score_wcc'] for r in results_nc])
+        s1_nc    = np.array([scored_map[(r['A'], r['B'], r['C'])]['score_weakest_link'] for r in results_nc])
+        wcc_nc   = np.array([r['score_wcc'] for r in results_nc])
+        undef_nc = np.array([r['score_wcc_adj'] is None for r in results_nc])
         plot_wcc_threshold_grid(
             s1_nc, wcc_nc,
             OUTPUT_DIR / 'wcc_threshold_grid_no_consec.png',
             bold_range=None,
+            undef_mask=undef_nc,
+        )
+
+        # Adj WCC グリッド（non-consecutive）
+        s1_nc_adj  = np.array([scored_map[(r['A'], r['B'], r['C'])]['score_weakest_link'] for r in results_nc])
+        wcc_nc_adj = np.array([
+            r['score_wcc_adj'] if r['score_wcc_adj'] is not None else np.nan
+            for r in results_nc
+        ])
+        plot_adj_wcc_threshold_grid(
+            s1_nc_adj, wcc_nc_adj,
+            OUTPUT_DIR / 'wcc_adj_threshold_grid_no_consec.png',
         )
 
     print('\nFP/FN WCC grids (original) ...')
