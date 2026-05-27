@@ -128,6 +128,23 @@ done
 
 ---
 
+## pipeline_counts.csv の数値変更履歴
+
+### 2026-05-27 更新
+
+| 項目 | 旧値（論文 LaTeX） | 新値（最新） | 理由 |
+|------|-------------------|------------|------|
+| Scatter-plot Unknown | 558 | 0 | 2022年処理完了により `judgment=Unknown` が解消 |
+| Scatter-plot Similar (Yes) | 145 | 227 | 2018–2022年分の処理完了で件数増加 |
+| Scatter-plot Non-similar (No) | 744 | 1,303 | 同上 |
+| Retrieval MLLM-similar (perspective/Yes) | 192 | 199 | 同上 |
+| Retrieval MLLM-non-similar (perspective/No) | 1,052 | 1,248 | 同上 |
+| D18 Unique patents | 1,030 | 959 | `rank_index/perspective/patent_ids.npy` の実測値 |
+
+> D18 Unique patents の差（1030 vs 959）は、論文執筆時点と現行の `rank_index` 生成条件の違いによるもの。
+
+---
+
 ## 詳細ドキュメント
 
 - パイプライン全体: [doc/architecture.md](doc/architecture.md)
