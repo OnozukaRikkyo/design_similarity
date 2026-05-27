@@ -270,6 +270,7 @@ def _render_two_panel_grid(
     out_path: Path,
     xlabel: str,
     bold_range: tuple[int, int] | None = None,
+    xticklabel_fmt: str = '{:.3f}',
 ) -> None:
     """Undefined 列 + T2 グリッドの 2 パネルレイアウトを描画して保存する。
 
@@ -324,7 +325,7 @@ def _render_two_panel_grid(
             ax_m.text(j, i, str(val), ha='center', va='center',
                       fontsize=13, color=txt_color, fontweight=fw)
     ax_m.set_xticks(range(n_wcc))
-    ax_m.set_xticklabels([f'{t:.3f}' for t in ths_wcc],
+    ax_m.set_xticklabels([xticklabel_fmt.format(t) for t in ths_wcc],
                           fontsize=16, rotation=45, ha='right')
     ax_m.set_yticks(range(n_s1))
     ax_m.set_yticklabels([])
@@ -350,6 +351,7 @@ def plot_threshold_grid(
     *,
     xlabel: str = '$T_2$ (Local Clustering Coefficient Threshold)',
     bold_range: tuple[int, int] | None = None,
+    xticklabel_fmt: str = '{:.3f}',
 ) -> None:
     """S1 × T2 閾値グリッドを描画する（Undefined 列付き 2 パネルレイアウト）。
 
@@ -362,11 +364,12 @@ def plot_threshold_grid(
         - スコアの種類に応じて xlabel を変更する
 
     Args:
-        s1_arr:     各 triad の S1（weakest-link 類似度）。
-        t2_arr:     各 triad の T2 スコア。np.nan = Undefined（左端列に集計）。
-        out_path:   出力 PNG パス。
-        xlabel:     X 軸ラベル。T2 スコアの種類に応じて変更。
-        bold_range: (lo, hi) のカウントを太字で強調。None = 強調なし。
+        s1_arr:          各 triad の S1（weakest-link 類似度）。
+        t2_arr:          各 triad の T2 スコア。np.nan = Undefined（左端列に集計）。
+        out_path:        出力 PNG パス。
+        xlabel:          X 軸ラベル。T2 スコアの種類に応じて変更。
+        bold_range:      (lo, hi) のカウントを太字で強調。None = 強調なし。
+        xticklabel_fmt:  X 軸ティックラベルのフォーマット文字列（デフォルト '{:.3f}'）。
     """
     undef_col, main_grid = _compute_threshold_grids(
         s1_arr, t2_arr, _S1_GRID_THS, _WCC_GRID_THS,
@@ -374,6 +377,7 @@ def plot_threshold_grid(
     _render_two_panel_grid(
         undef_col, main_grid, _S1_GRID_THS, _WCC_GRID_THS,
         out_path, xlabel=xlabel, bold_range=bold_range,
+        xticklabel_fmt=xticklabel_fmt,
     )
 
 
@@ -430,6 +434,45 @@ def plot_fp_fn_wcc_grids(results: list[dict], out_dir: Path, suffix: str = '') -
         )
 
 
+def plot_s3_degree_grid(
+    results: list[dict],
+    scored_map: dict,
+    out_path: Path,
+) -> None:
+    """S1 × S3（外部次数）閾値グリッドを描画して保存する。
+
+    S3 = min(deg(A)-2, deg(B)-2, deg(C)-2)
+    triad 内部の 2 辺を除いた外部次数の最小値。常に定義されるため Undefined 列は 0。
+
+    X 軸刻みはデータの実際の S3 分布から自動決定する（最大 15 ステップ）。
+    """
+    pairs = [
+        (scored_map[key]['score_weakest_link'], r['score_s3'])
+        for r in results
+        if (key := (r['A'], r['B'], r['C'])) in scored_map
+    ]
+    if not pairs:
+        print('  [skip] no triads with both scored_map and score_s3')
+        return
+
+    s1_arr = np.array([p[0] for p in pairs])
+    s3_arr = np.array([p[1] for p in pairs], dtype=float)
+
+    s3_min = int(s3_arr.min())
+    s3_max = int(s3_arr.max())
+    n_steps = min(15, s3_max - s3_min + 1)
+    step = max(1, (s3_max - s3_min) // (n_steps - 1)) if n_steps > 1 else 1
+    s3_ths = np.arange(s3_min, s3_min + step * n_steps, step)
+
+    undef_col, main_grid = _compute_threshold_grids(s1_arr, s3_arr, _S1_GRID_THS, s3_ths)
+    _render_two_panel_grid(
+        undef_col, main_grid, _S1_GRID_THS, s3_ths,
+        out_path,
+        xlabel='$T_3$ (External Degree Threshold,  $\\min(k_A - 2,\\, k_B - 2,\\, k_C - 2)$)',
+        xticklabel_fmt='{:.0f}',
+    )
+
+
 # ==============================================================================
 # Output helper
 # ==============================================================================
@@ -461,6 +504,7 @@ def main() -> list[dict]:
     # Watts-Strogatz の結果と異なる値になる。
     G_unweighted = build_citation_graph(data)
     clustering = nx.clustering(G_unweighted)
+    degrees = dict(G_unweighted.degree())
     cv_vals_all = list(clustering.values())
     print(f'  Local clustering: min={min(cv_vals_all):.4f}  '
           f'median={statistics.median(cv_vals_all):.4f}  '
@@ -486,12 +530,15 @@ def main() -> list[dict]:
         # S2_adj: triad 内部エッジを除外した調整済み局所クラスタリング係数
         c_adjs = triad_adjusted_clustering_coeff(G_unweighted, a, b, c)
         wcc_adj = min(c_adjs) if all(x is not None for x in c_adjs) else None
+        # S3: triad 内部の 2 辺を除いた外部次数の最小値
+        score_s3 = min(degrees[a] - 2, degrees[b] - 2, degrees[c] - 2)
         results.append({
             'A': a, 'B': b, 'C': c,
             's_AB': s_ab, 's_BC': s_bc, 's_AC': s_ac,
             'score_wcc': wcc,
             'score_wcc_adj': wcc_adj,
             'cc_adj_A': c_adjs[0], 'cc_adj_B': c_adjs[1], 'cc_adj_C': c_adjs[2],
+            'score_s3': score_s3,
         })
 
     results.sort(key=lambda r: -r['score_wcc'])
@@ -550,6 +597,11 @@ def main() -> list[dict]:
             f.write(json.dumps(row) + '\n')
     print(f'All {len(results)} triangles → {out_path}')
 
+    s3_vals_all = [r['score_s3'] for r in results]
+    print(f'  S3 (external degree)  min={min(s3_vals_all)}  '
+          f'median={statistics.median(s3_vals_all):.1f}  '
+          f'max={max(s3_vals_all)}')
+
     # ------------------------------------------------------------------
     # 可視化
     # ------------------------------------------------------------------
@@ -596,7 +648,7 @@ def main() -> list[dict]:
         plot_threshold_grid(
             s1_adj_arr, wcc_adj_arr,
             OUTPUT_DIR / 'wcc_adj_threshold_grid.png',
-            xlabel='$T_2$ (Triad-Adjusted Local Clustering Coefficient Threshold)',
+            xlabel='$T_2$ (Local Clustering Coefficient Threshold)',
         )
 
         # 連番D-IDを含むtriadを除去したグリッド + JSONL保存
@@ -644,8 +696,12 @@ def main() -> list[dict]:
         plot_threshold_grid(
             s1_nc_adj, wcc_nc_adj,
             OUTPUT_DIR / 'wcc_adj_threshold_grid_no_consec.png',
-            xlabel='$T_2$ (Triad-Adjusted Local Clustering Coefficient Threshold)',
+            xlabel='$T_2$ (Local Clustering Coefficient Threshold)',
         )
+
+    if scored_map:
+        print('\nS3 (external degree) threshold grid ...')
+        plot_s3_degree_grid(results, scored_map, OUTPUT_DIR / 's3_degree_threshold_grid.png')
 
     print('\nFP/FN WCC grids (original) ...')
     plot_fp_fn_wcc_grids(results, OUTPUT_DIR)
