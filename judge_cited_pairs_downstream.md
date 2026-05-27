@@ -55,7 +55,7 @@ done
 
 0 件の年は `judgment=Unknown` になるが処理は正常に完了する。
 
-### 処理状況（2026-05-26 更新）
+### 処理状況（2026-05-27 更新）
 
 ```
 2007.jsonl: 5859/5859   ✓
@@ -73,19 +73,19 @@ done
 2019.jsonl: 59044/59044 ✓
 2020.jsonl: 55765/55765 ✓
 2021.jsonl: 46614/46614 ✓
-2022.jsonl: 1689/17127  処理中
+2022.jsonl: 17127/17127 ✓
 ```
 
-### all.jsonl の判定内訳（2026-05-26 更新、D18 / cosine_numpy）
+### all.jsonl の判定内訳（2026-05-27 更新、D18 / cosine_numpy）
 
 | judgment | 件数 |
 |----------|-----:|
-| Yes      |  226 |
-| No       | 1,238|
-| Unknown  |   66 |
+| Yes      |  227 |
+| No       | 1,303|
+| Unknown  |    0 |
 | **合計** | **1,530** |
 
-> 2022 処理中のため Unknown 66 件が残る。完了後に `python update_downstream.py` を再実行。
+> 2022 完了・Unknown 解消済み。`python update_downstream.py` 再実行済み（2026-05-27 13:22）。
 
 ---
 

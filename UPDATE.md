@@ -78,7 +78,7 @@ judge_cited_pairs.py（別サーバーで実行中）
     ║  F  export_pipeline_counts → output/pipeline_counts.csv      ║
     ║       ※ D と G 両方完了後に実行（依存あり）                  ║
     ║                                                              ║
-    ║  [--with-graph 時のみ]                                       ║
+    ║  [デフォルト実行、--no-graph でスキップ]                       ║
     ║  K  graph_analysis         → graph/output/D18/               ║
     ║                               triadic_scored.jsonl           ║
     ║  L  extract_high_sim_triads→ graph/output/D18/high_sim/      ║
@@ -114,7 +114,7 @@ judge_cited_pairs.py（別サーバーで実行中）
 | — | N | `graph/verify/discord_analysis.py` | K,G | 全件上書き |
 | — | M | `graph/verify/wcc_scoring.py` | K,N | 全件上書き |
 
-V1〜V4 は `--with-vector` 時のみ、K〜M は `--with-graph` 時のみ実行。
+V1〜V4 は `--with-vector` 時のみ実行。K〜M はデフォルトで実行（`--no-graph` でスキップ）。
 
 ---
 
