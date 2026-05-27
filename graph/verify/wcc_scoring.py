@@ -305,7 +305,7 @@ def _render_two_panel_grid(
     ax_u.set_xticklabels(['Undefined'], fontsize=14, rotation=45, ha='right')
     ax_u.set_yticks(range(n_s1))
     ax_u.set_yticklabels([f'{t:.3f}' for t in ths_s1], fontsize=16)
-    ax_u.set_ylabel('T1 (Weakest-Link Threshold)', fontsize=24)
+    ax_u.set_ylabel('$T_1$ (Weakest-Link Threshold)', fontsize=24)
     ax_u.tick_params(labelsize=16, width=0.6, length=3)
     for sp in ax_u.spines.values():
         sp.set_linewidth(0.6)
@@ -348,7 +348,7 @@ def plot_threshold_grid(
     t2_arr: np.ndarray,
     out_path: Path,
     *,
-    xlabel: str = 'T2 (Local Clustering Coefficient Threshold)',
+    xlabel: str = '$T_2$ (Local Clustering Coefficient Threshold)',
     bold_range: tuple[int, int] | None = None,
 ) -> None:
     """S1 × T2 閾値グリッドを描画する（Undefined 列付き 2 パネルレイアウト）。
@@ -596,7 +596,7 @@ def main() -> list[dict]:
         plot_threshold_grid(
             s1_adj_arr, wcc_adj_arr,
             OUTPUT_DIR / 'wcc_adj_threshold_grid.png',
-            xlabel='T2 (Triad-Adjusted Local Clustering Coefficient Threshold)',
+            xlabel='$T_2$ (Triad-Adjusted Local Clustering Coefficient Threshold)',
         )
 
         # 連番D-IDを含むtriadを除去したグリッド + JSONL保存
@@ -644,7 +644,7 @@ def main() -> list[dict]:
         plot_threshold_grid(
             s1_nc_adj, wcc_nc_adj,
             OUTPUT_DIR / 'wcc_adj_threshold_grid_no_consec.png',
-            xlabel='T2 (Triad-Adjusted Local Clustering Coefficient Threshold)',
+            xlabel='$T_2$ (Triad-Adjusted Local Clustering Coefficient Threshold)',
         )
 
     print('\nFP/FN WCC grids (original) ...')
